@@ -1,0 +1,4 @@
+record_id,category,status,current_value,target_value,priority,owner
+REC-001,Operations,attention_needed,72,90,high,Demo Team
+REC-002,Payments,on_track,98,95,low,Demo Team
+REC-003,Logistics,watch,61,80,medium,Demo Team
