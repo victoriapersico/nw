@@ -612,6 +612,72 @@ Frozen contracts let each track work independently with mocks/fixtures.
 
 ---
 
+## DEC-024 — Baseline implementation and configurable thresholds
+
+### Alternatives considered
+1. Use one fixed conversion threshold for every merchant and country.
+2. Hard-code all detector and baseline thresholds inside the implementation.
+3. Train an interpretable seasonal baseline and configure operational thresholds centrally.
+
+### Decision
+The initial baseline is trained only with January-April transactions and groups results by:
+
+```text
+merchant x country x hour_of_week
+```
+
+Each supported bucket stores approval rate, sample size, and variance. A bucket with fewer than `BASELINE_MINIMUM_VOLUME` transactions is unavailable and returns no expected conversion.
+
+Global defaults are declared through environment settings:
+
+```text
+BASELINE_MINIMUM_VOLUME=50
+DETECTOR_MINIMUM_VOLUME=50
+DETECTOR_ABSOLUTE_DROP=0.08
+DETECTOR_Z_SCORE_THRESHOLD=-3
+DETECTOR_CONSECUTIVE_WINDOWS=2
+LIVE_WINDOW_MINUTES=5
+```
+
+### Why
+- Keeps normal behavior seasonal and explainable.
+- Avoids training leakage from validation or test months.
+- Allows calibration without editing detector code.
+- Avoids alerting on statistically weak low-volume slices.
+
+### Tradeoff
+The first baseline does not model every finer dimension and can abstain when a merchant-country-hour bucket lacks support.
+
+### Revisit
+After evaluation shows that supported optional slices or threshold calibration are needed to reduce false positives or improve recall.
+
+---
+
+## DEC-025 — Multi-country problems are represented per country
+
+### Alternatives considered
+1. Allow one `InjectionConfig` and one `Incident` to contain a list of countries.
+2. Use one country per injection and create one merchant-country incident per affected country.
+
+### Decision
+Keep `InjectionConfig.country` and `Incident.country` singular. A merchant issue that affects several countries is expanded into one injection per country and is detected as independent merchant-country incidents.
+
+The UI may offer an "all countries" convenience option, but it must expand into individual injection requests before reaching the simulator.
+
+### Why
+- Baseline conversion, transaction volume, and money impact are country-specific.
+- A failure can have different severity by country.
+- It preserves the detector's transaction-only isolation from injection intent.
+- MVP-06 can later relate incidents without losing country-level evidence.
+
+### Tradeoff
+One broad provider or merchant failure can create several visible incidents.
+
+### Revisit
+Only after MVP-06 is stable and the dashboard needs a derived cross-country incident grouping for presentation.
+
+---
+
 # Adding a new decision
 
 Append decisions using:
