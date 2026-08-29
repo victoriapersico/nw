@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from functools import lru_cache
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from backend.config import settings
 from backend.detector.config import DetectorConfig
 from backend.detector.detector import AnomalyDetector
 from backend.evaluation.scenarios import ScenarioDefinition
+from backend.root_cause import RootCauseAnalyzer
 from backend.schemas import (
     DetectionRequest,
     DetectionResponse,
@@ -32,21 +34,23 @@ DEFAULT_HISTORY_PATH = (
 
 
 class ControlTowerEvaluationRuntime:
-    """Compose the currently available simulator, baseline, and detector.
+    """Compose the simulator, baseline, detector, and deterministic RCA."""
 
-    There is no RCA engine in this branch yet. ``diagnose`` therefore returns a
-    transparent ``insufficient_evidence`` result instead of inventing a cause.
-    Once MVP-07 is merged, replace only that method with the RCA call.
-    """
-
-    def __init__(self, baseline: SeasonalBaseline) -> None:
+    def __init__(
+        self,
+        baseline: SeasonalBaseline,
+        root_cause_analyzer: RootCauseAnalyzer | None = None,
+    ) -> None:
         self._baseline = baseline
+        self._root_cause_analyzer = root_cause_analyzer
         self._simulator: LiveTransactionSimulator | None = None
         self._detector: AnomalyDetector | None = None
         self._directives: tuple[str, ...] = ()
+        self._recent_batches: deque[TransactionBatch] = deque(maxlen=2)
 
     def reset(self, scenario: ScenarioDefinition) -> None:
         self._directives = scenario.directives
+        self._recent_batches.clear()
         self._simulator = LiveTransactionSimulator(
             start_time=scenario.start_at,
             transactions_per_window=scenario.volume_per_window,
@@ -81,20 +85,19 @@ class ControlTowerEvaluationRuntime:
 
     def detect(self, request: DetectionRequest) -> DetectionResponse:
         # InjectionConfig is intentionally unavailable at this boundary.
+        if (
+            not self._recent_batches
+            or self._recent_batches[-1].window_end != request.batch.window_end
+        ):
+            self._recent_batches.append(request.batch.model_copy(deep=True))
         return DetectionResponse(incidents=self._require_detector().detect(request.batch))
 
     def diagnose(self, incident: Incident) -> Diagnosis:
-        return Diagnosis(
-            incident_id=incident.incident_id,
-            root_cause_dimensions=[],
-            evidence=[],
-            confidence=0.0,
-            diagnosis_status="insufficient_evidence",
-            explanation=(
-                "The deterministic RCA engine has not been integrated yet; "
-                "no root cause is asserted from the detector result alone."
-            ),
-            recommended_action="Inspect the incident while RCA evidence is unavailable.",
+        if self._root_cause_analyzer is None:
+            return _unavailable_diagnosis(incident)
+        return self._root_cause_analyzer.diagnose(
+            incident,
+            tuple(self._recent_batches),
         )
 
     def _require_simulator(self) -> LiveTransactionSimulator:
@@ -113,15 +116,29 @@ def build_runtime(
 ) -> ControlTowerEvaluationRuntime:
     """Build the default runtime from the reproducible MVP-01 history artifact."""
 
+    resolved_path = str(Path(history_path).resolve())
+    baseline, root_cause_analyzer = _load_runtime_components(
+        resolved_path,
+        settings.baseline_minimum_volume,
+    )
     return ControlTowerEvaluationRuntime(
-        baseline=_load_baseline(
-            str(Path(history_path).resolve()), settings.baseline_minimum_volume
-        )
+        baseline=baseline,
+        root_cause_analyzer=root_cause_analyzer,
     )
 
 
 @lru_cache(maxsize=4)
 def _load_baseline(history_path: str, minimum_volume: int) -> SeasonalBaseline:
+    """Backward-compatible baseline loader used by existing integration tests."""
+
+    return _load_runtime_components(history_path, minimum_volume)[0]
+
+
+@lru_cache(maxsize=4)
+def _load_runtime_components(
+    history_path: str,
+    minimum_volume: int,
+) -> tuple[SeasonalBaseline, RootCauseAnalyzer]:
     path = Path(history_path)
     if not path.exists():
         raise FileNotFoundError(
@@ -150,8 +167,23 @@ def _load_baseline(history_path: str, minimum_volume: int) -> SeasonalBaseline:
     # preserved in the records validated by Transaction.
     training_frame["decline_code"] = training_frame["decline_code"].astype(object)
     training_frame.loc[training_frame["decline_code"].isna(), "decline_code"] = None
-    transactions = (
+    transactions = tuple(
         Transaction.model_validate(row)
         for row in training_frame.to_dict(orient="records")
     )
-    return SeasonalBaseline(minimum_volume=minimum_volume).fit(transactions)
+    return (
+        SeasonalBaseline(minimum_volume=minimum_volume).fit(transactions),
+        RootCauseAnalyzer(transactions),
+    )
+
+
+def _unavailable_diagnosis(incident: Incident) -> Diagnosis:
+    return Diagnosis(
+        incident_id=incident.incident_id,
+        root_cause_dimensions=[],
+        evidence=[],
+        confidence=0.0,
+        diagnosis_status="insufficient_evidence",
+        explanation="Historical root-cause evidence is unavailable.",
+        recommended_action="Investigate the affected payment route.",
+    )
