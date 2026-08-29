@@ -982,5 +982,23 @@ Merchant colors remain accents, while incident red is reserved for operational a
 The Streamlit implementation approximates the reference layout and does not reproduce
 Stripe's proprietary components or interactions exactly.
 
+## DEC-028 — Do not fabricate live monitoring values in the dashboard
+
+### Decision
+Keep the compact Streamlit fragment for visual refresh, but render only approval values
+already supplied by the Control Tower API. The frontend must not apply deterministic
+movements to operational metrics while the simulator and incident endpoints are live.
+
+### Why
+- judges must see evidence-based values rather than an animated mock;
+- the simulator, detector, RCA and diagnosis endpoints are now available;
+- this preserves the isolation guarantee: the Judge Lab configuration never becomes
+  dashboard evidence.
+
+### Tradeoff
+The API advances simulation on injection and explicit monitoring ticks, rather than
+continuously from the browser. Add polling or a server-driven stream only after the MVP
+flow is stable.
+
 Update this file whenever the team makes a meaningful change that could come up in technical defense.
 
