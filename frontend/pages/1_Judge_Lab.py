@@ -1,6 +1,8 @@
 """Judge-only incident injection controls for the Control Tower demo."""
 
 import streamlit as st
+import os
+import requests
 
 from backend.schemas import (
     COUNTRY_ISSUING_BANKS,
@@ -8,6 +10,10 @@ from backend.schemas import (
     InjectionConfig,
 )
 
+API_BASE_URL = os.getenv(
+      "CONTROL_TOWER_API_URL",
+      "http://127.0.0.1:8000",
+)
 
 st.markdown(
     """
@@ -108,8 +114,21 @@ if submitted:
         target_approval_rate=target_rate_percent / 100,
         duration_windows=int(duration_windows),
     )
-    st.session_state["active_injection"] = config.model_dump()
-    st.rerun()
+
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/injections",
+            json={"config": config.model_dump(mode="json")},
+            timeout=30,
+        )
+        response.raise_for_status()
+        result = response.json()
+
+        st.session_state["active_injection"] = config.model_dump(mode="json")
+        st.session_state["injection_id"] = result["injection_id"]
+        st.rerun()
+    except requests.RequestException as exc:
+        st.error(f"Could not create the test injection: {exc}")
 
 active_injection = st.session_state.get("active_injection")
 if active_injection:

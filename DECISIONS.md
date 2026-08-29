@@ -612,6 +612,274 @@ Frozen contracts let each track work independently with mocks/fixtures.
 
 ---
 
+## DEC-024 — Deterministic hourly historical generator
+
+### Alternatives considered
+1. Generate each transaction independently without a temporal model.
+2. Generate history by hourly merchant-country windows with deterministic local
+   random streams.
+
+### Decision
+Use option 2 in `backend.data_generator`. A seed plus an hourly timestamp derives
+the random stream for that hour. The generator returns a pandas DataFrame with
+derived `split` and `hour_of_week` columns, while every raw row is first validated
+as a `Transaction`.
+
+### Why
+- matches the `merchant × country × hour_of_week` baseline;
+- preserves normal seasonal variation without hidden incidents;
+- makes a single hour reproducible in isolation for debugging and fixtures;
+- supports local CSV persistence without a database.
+
+### Tradeoff
+Generating a complete year takes longer than a tiny static fixture. The caller can
+generate a shorter hourly-aligned interval while developing.
+
+### Revisit
+Only if profiling shows a full-year DataFrame is too slow for the demo machine.
+
+---
+
+## DEC-025 — Baseline implementation and configurable thresholds
+
+### Alternatives considered
+1. Use one fixed conversion threshold for every merchant and country.
+2. Hard-code all detector and baseline thresholds inside the implementation.
+3. Train an interpretable seasonal baseline and configure operational thresholds centrally.
+
+### Decision
+The initial baseline is trained only with January-April transactions and groups results by:
+
+```text
+merchant x country x hour_of_week
+```
+
+Each supported bucket stores approval rate, sample size, and variance. A bucket with fewer than `BASELINE_MINIMUM_VOLUME` transactions is unavailable and returns no expected conversion.
+
+Global defaults are declared through environment settings:
+
+```text
+BASELINE_MINIMUM_VOLUME=50
+DETECTOR_MINIMUM_VOLUME=50
+DETECTOR_ABSOLUTE_DROP=0.08
+DETECTOR_Z_SCORE_THRESHOLD=-3
+DETECTOR_CONSECUTIVE_WINDOWS=2
+LIVE_WINDOW_MINUTES=5
+```
+
+### Why
+- Keeps normal behavior seasonal and explainable.
+- Avoids training leakage from validation or test months.
+- Allows calibration without editing detector code.
+- Avoids alerting on statistically weak low-volume slices.
+
+### Tradeoff
+The first baseline does not model every finer dimension and can abstain when a merchant-country-hour bucket lacks support.
+
+### Revisit
+After evaluation shows that supported optional slices or threshold calibration are needed to reduce false positives or improve recall.
+
+---
+
+## DEC-026 — Multi-country problems are represented per country
+
+### Alternatives considered
+1. Allow one `InjectionConfig` and one `Incident` to contain a list of countries.
+2. Use one country per injection and create one merchant-country incident per affected country.
+
+### Decision
+Keep `InjectionConfig.country` and `Incident.country` singular. A merchant issue that affects several countries is expanded into one injection per country and is detected as independent merchant-country incidents.
+
+The UI may offer an "all countries" convenience option, but it must expand into individual injection requests before reaching the simulator.
+
+### Why
+- Baseline conversion, transaction volume, and money impact are country-specific.
+- A failure can have different severity by country.
+- It preserves the detector's transaction-only isolation from injection intent.
+- MVP-06 can later relate incidents without losing country-level evidence.
+
+### Tradeoff
+One broad provider or merchant failure can create several visible incidents.
+
+### Revisit
+Only after MVP-06 is stable and the dashboard needs a derived cross-country incident grouping for presentation.
+
+---
+
+## DEC-027 — Escrow or payment holds are post-MVP only
+
+### Decision
+Do not implement escrow, funds custody, or automatic payment holds in the Control
+Tower MVP. Retain it as a possible future integration for marketplace-style flows.
+
+### Why
+The MVP monitors transactions and recommends actions; it does not move, retain,
+or release money. Escrow would require payment-provider integrations, a ledger,
+compliance, auditability, and explicit operational approval.
+
+### Future direction
+If later approved, the safe progression is:
+
+```text
+detected incident → recommendation to review or hold → human approval → payment-provider action
+```
+
+The detector must not initiate a hold automatically.
+
+### Revisit
+Only after the core monitoring MVP is stable and a licensed payment/custody
+provider plus compliance requirements are in scope.
+
+---
+
+## DEC-028 — Evaluation is a black-box, deterministic runtime harness
+
+### Alternatives considered
+1. Hard-code expected alerts in the harness and call that an evaluation.
+2. Let the detector read scenario or injection metadata.
+3. Define deterministic stimuli and expectations, then run simulator → detector →
+   RCA through separate interfaces.
+
+### Decision
+Use option 3. The evaluator owns seeds, time, expected outcomes and simulator
+stimuli. It passes an `InjectionConfig` only to the simulator and sends the
+detector only `DetectionRequest(batch=...)`. It produces JSON and Markdown
+reports.
+
+### Why
+- proves inference from transaction data rather than test-specific shortcuts;
+- makes regressions repeatable and measurable;
+- keeps MVP-02, MVP-05 and MVP-07 independently mergeable;
+- supports the required 30-scenario challenge suite.
+
+### Tradeoff
+An adapter is needed once the live simulator and detector are merged. Until then,
+the catalog and its contract can be tested but not executed end-to-end.
+
+### Revisit
+Add ground-truth loss reporting when the simulator exposes it, so estimated-loss
+error becomes an evaluated metric.
+
+---
+
+## DEC-029 — Detector uses seasonal deviation and per-slice persistence
+
+### Alternatives considered
+1. Alert on any raw conversion decrease.
+2. Alert after one unusual live window.
+3. Compare each merchant-country live group to its seasonal baseline and require repeated statistical degradation.
+
+### Decision
+MVP-05 evaluates each `merchant x country` group independently. It calculates actual approval conversion for the live batch, compares it to the expected baseline conversion, and computes:
+
+```text
+conversion_drop_pp = (expected_conversion - actual_conversion) x 100
+z_score = (actual_conversion - expected_conversion) / sqrt(baseline_variance / live_volume)
+```
+
+An incident candidate must meet configured volume, conversion-drop, and z-score thresholds for the configured number of consecutive windows. The persistence counter is tracked separately for each `(merchant, country)` key.
+
+### Why
+- A raw decrease is not enough without seasonal context.
+- Repeated windows reduce noise-based false positives.
+- Independent counters allow simultaneous incidents in different merchants or countries.
+- The approach remains explainable and directly testable.
+
+### Tradeoff
+The first alert is delayed until the persistence threshold is met, and a broad merchant-country incident may contain multiple finer causes that RCA resolves later.
+
+### Revisit
+After MVP-06 and evaluation scenarios 22-25 demonstrate whether additional slice-level detection or grouping is required.
+
+---
+
+## DEC-030 — Initial incident severity is based on approval-rate drop
+
+### Decision
+MVP-05 assigns a preliminary severity from the measured conversion drop:
+
+```text
+critical: drop >= 30pp
+high:     drop >= 20pp
+medium:   drop >= 12pp
+low:      drop >= configured minimum drop
+```
+
+### Why
+This is deterministic, immediately explainable, and available when an incident is first emitted.
+
+### Tradeoff
+Conversion drop alone is not a complete business priority measure; a small high-value incident can deserve more attention than a large low-value one.
+
+### Revisit
+MVP-06 will combine severity with estimated loss, confidence, and persistence to prioritize simultaneous incidents.
+
+---
+
+## DEC-029 — MVP-06 prioritizes without changing the Incident contract
+
+### Decision
+Do not add `priority`, `confidence`, or relationship fields to the frozen `Incident` contract for the first MVP-06 implementation.
+
+Incidents are ordered externally using existing fields:
+
+```text
+severity → estimated_loss → anomaly_score → conversion_drop_pp
+```
+
+`anomaly_score` is the initial proxy for statistical confidence.
+
+### Why
+- The current contract already supports deterministic ordering.
+- Adding fields unilaterally would create avoidable integration risk for the other tracks.
+- Priority is derived data and does not need to be persisted in each incident.
+
+### Tradeoff
+The dashboard does not receive a separately named confidence value from the incident engine yet.
+
+### Revisit
+If the dashboard, evaluation harness, or RCA needs an explicit confidence field that cannot be derived from anomaly evidence.
+
+---
+
+## DEC-030 — MVP-06 deduplicates only exact incident identities
+
+### Decision
+Do not deduplicate incidents merely because they share `merchant` and `country`.
+For the current contract, only equal `incident_id` values are treated as duplicate representations of the same incident.
+
+### Why
+Two independent payment problems can affect the same merchant and country. MVP-05 does not yet carry enough slice detail (provider, method, bank) for the incident engine to safely merge them.
+
+### Tradeoff
+The dashboard can temporarily show multiple incidents for the same merchant-country scope until RCA adds finer evidence.
+
+### Revisit
+When detector incidents include a stable affected-slice identity, extend the duplicate key with provider, payment method, issuing bank, and other supported dimensions.
+
+---
+
+## DEC-031 — MVP-08 preserves deterministic RCA facts
+
+### Decision
+MVP-08 receives the deterministic `Diagnosis` output produced by MVP-07 and
+uses the language model only to author `explanation` and `recommended_action`.
+It preserves status, dimensions, evidence, and confidence locally.
+
+### Why
+MVP-07 already returns a schema-valid deterministic diagnosis. Preserving its
+facts avoids a breaking contract rewrite and prevents the language model from
+modifying statistical diagnosis.
+
+### Tradeoff
+The first AI layer is a narrative enrichment over the existing Diagnosis model,
+rather than a newly named EvidencePackage-to-Diagnosis boundary.
+
+### Revisit
+When the team schedules a coordinated, additive EvidencePackage contract change.
+
+---
+
 # Adding a new decision
 
 Append decisions using:
@@ -714,22 +982,23 @@ Merchant colors remain accents, while incident red is reserved for operational a
 The Streamlit implementation approximates the reference layout and does not reproduce
 Stripe's proprietary components or interactions exactly.
 
-## DEC-028 — Use a deterministic live-demo ticker until the simulator API is available
+## DEC-028 — Do not fabricate live monitoring values in the dashboard
 
 ### Decision
-Refresh the approval-rate and transaction KPIs every two seconds with a deterministic
-Streamlit fragment while the live simulator and streaming endpoints are still pending.
-The fragment updates only the dashboard summary and does not reload the page or expose
-Judge Lab injection configuration to the detector.
+Keep the compact Streamlit fragment for visual refresh, but render only approval values
+already supplied by the Control Tower API. The frontend must not apply deterministic
+movements to operational metrics while the simulator and incident endpoints are live.
 
 ### Why
-- the Control Tower must visibly feel live during the demo;
-- the current backend contains shared contracts but no live simulator endpoint;
-- fragment-scoped refresh preserves Judge Lab interaction and avoids full-page reruns.
+- judges must see evidence-based values rather than an animated mock;
+- the simulator, detector, RCA and diagnosis endpoints are now available;
+- this preserves the isolation guarantee: the Judge Lab configuration never becomes
+  dashboard evidence.
 
 ### Tradeoff
-The changing values are demo data, not real transaction batches. Replace the ticker with
-polling against the simulator API as soon as the simulator track exposes its endpoint.
+The API advances simulation on injection and explicit monitoring ticks, rather than
+continuously from the browser. Add polling or a server-driven stream only after the MVP
+flow is stable.
 
 Update this file whenever the team makes a meaningful change that could come up in technical defense.
 

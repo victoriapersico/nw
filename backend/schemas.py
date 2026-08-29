@@ -217,6 +217,32 @@ class DiagnosisResponse(BaseModel):
 
     diagnosis: Diagnosis
 
+class DiagnosedIncident(BaseModel):
+    """One detected incident paired with its RCA and AI narration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    incident: Incident
+    diagnosis: Diagnosis
+
+
+class MerchantIncidentsResponse(BaseModel):
+    """Active incidents visible within one merchant context only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    merchant: Merchant
+    incidents: list[DiagnosedIncident] = Field(default_factory=list)
+
+
+class LiveTickResponse(BaseModel):
+    """Result of advancing one simulated monitoring window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    window_start: datetime
+    window_end: datetime
+    incidents: list[DiagnosedIncident] = Field(default_factory=list)
 
 class HealthResponse(BaseModel):
     status: Literal["ok"]
