@@ -636,6 +636,83 @@ Append decisions using:
 ...
 ```
 
+## DEC-024 — Merchant-specific visual identity
+
+### Alternatives considered
+1. Use the same visual identity for every merchant.
+2. Create a completely different interface for each merchant.
+3. Keep a shared dashboard structure while dynamically adapting its visual identity.
+
+### Decision
+Use a single dashboard structure and dynamically apply a different color palette based on the selected merchant.
+
+Initial palettes:
+
+- Rappi: coral.
+- Carrefour: blue with red accents.
+- Despegar: purple with yellow accents.
+
+Streamlit development controls are also hidden so the demo feels like a finished application rather than a development tool.
+
+### Why
+- improves the sense of merchant personalization;
+- visually reinforces separation between merchants;
+- keeps one interface that is easy to develop and test;
+- avoids duplicating components and logic;
+- improves the visual quality of the demo.
+
+### Tradeoff
+The customization is visual only. It is not yet a complete white-label system and does not use official brand assets.
+
+### Revisit
+Review the palettes and add official logos only after the end-to-end MVP flow is complete.
+
+
+## DEC-026 — Separate customer and judge experiences
+
+### Alternatives considered
+1. Display the incident injector inside the customer dashboard.
+2. Place the customer dashboard and injector in separate Streamlit pages.
+3. Build a separate application for the judge.
+
+### Decision
+Keep one customer-facing Streamlit dashboard and expose the Judge Lab as a compact
+floating configuration panel anchored in the sidebar. The panel opens above the
+dashboard and contains incident configuration, injection and reset controls.
+
+The lab and dashboard share the same application state and backend contracts.
+
+### Why
+- testing controls stay collapsed unless a judge deliberately opens the lab;
+- the dashboard remains visible while configuring trial-by-fire scenarios;
+- judges can inject and observe an incident without navigating between pages;
+- one Streamlit application remains simple to run and demonstrate.
+
+### Tradeoff
+The lab is visually separated but is not protected by authentication or role-based access.
+
+### Revisit
+Consider separate routes, authentication and role-based access only after the end-to-end MVP is stable.
+
+
 Do not silently change a shared architectural decision in one branch.
 
+## DEC-027 — Use a Stripe-inspired operations dashboard layout
+
+### Decision
+Use the classic Stripe dashboard information hierarchy as the visual reference for
+the Control Tower: a persistent blue-gray navigation sidebar, compact top utility
+bar, dense typography, and rectangular white monitoring panels with subtle borders.
+Merchant colors remain accents, while incident red is reserved for operational alerts.
+
+### Why
+- judges can scan navigation, status and monitoring data quickly;
+- the visual language is familiar for a payments operations product;
+- compact panels keep the incident and evidence visible without decorative clutter.
+
+### Tradeoff
+The Streamlit implementation approximates the reference layout and does not reproduce
+Stripe's proprietary components or interactions exactly.
+
 Update this file whenever the team makes a meaningful change that could come up in technical defense.
+
