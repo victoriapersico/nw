@@ -706,6 +706,36 @@ Only after MVP-06 is stable and the dashboard needs a derived cross-country inci
 
 ---
 
+## DEC-027 — Evaluation is a black-box, deterministic runtime harness
+
+### Alternatives considered
+1. Hard-code expected alerts in the harness and call that an evaluation.
+2. Let the detector read scenario or injection metadata.
+3. Define deterministic stimuli and expectations, then run simulator → detector →
+   RCA through separate interfaces.
+
+### Decision
+Use option 3. The evaluator owns seeds, time, expected outcomes and simulator
+stimuli. It passes an `InjectionConfig` only to the simulator and sends the
+detector only `DetectionRequest(batch=...)`. It produces JSON and Markdown
+reports.
+
+### Why
+- proves inference from transaction data rather than test-specific shortcuts;
+- makes regressions repeatable and measurable;
+- keeps MVP-02, MVP-05 and MVP-07 independently mergeable;
+- supports the required 30-scenario challenge suite.
+
+### Tradeoff
+An adapter is needed once the live simulator and detector are merged. Until then,
+the catalog and its contract can be tested but not executed end-to-end.
+
+### Revisit
+Add ground-truth loss reporting when the simulator exposes it, so estimated-loss
+error becomes an evaluated metric.
+
+---
+
 # Adding a new decision
 
 Append decisions using:
