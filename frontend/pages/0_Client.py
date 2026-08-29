@@ -109,54 +109,85 @@ MERCHANT_LOGOS = {
 
 st.markdown("""
 <style>
+    :root {
+        --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:20px; --space-6:24px; --space-8:32px;
+        --surface:#ffffff; --surface-muted:#fafbfc; --page:#f6f7f9; --border:#e3e7ee;
+        --text:#172033; --muted:#687386; --danger:#c93645; --danger-soft:#fff3f4;
+        --radius-card:8px; --radius-control:6px; --shadow:0 1px 3px rgba(23,32,51,.035);
+    }
     /* Hide Streamlit's development chrome: Deploy, menu and top decoration. */
     [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"], #MainMenu { display: none !important; }
-    .stApp { color:#3c4257; background:linear-gradient(135deg,#dce6f2 0%,#edf2f8 48%,#d9e5f1 100%); }
-    .block-container { width:calc(100% - 2rem); max-width:1440px; margin-inline:auto; padding:.8rem 0 2rem; }
+    .stApp { color:var(--text); background:var(--page); }
+    [data-testid="stMain"] { background:#eef2f6; }
+    [data-testid="stMainBlockContainer"],
+    .block-container {
+        width:min(100%,1280px); max-width:1280px; margin-left:auto !important; margin-right:auto !important;
+        padding:var(--space-3) var(--space-6) var(--space-6);
+        background:transparent !important; border:0 !important; border-radius:0 !important; box-shadow:none !important;
+        transition:width .2s ease,margin .2s ease;
+    }
     html, body, [class*="css"] { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; font-size:14px; }
     h1, h2, h3, h4, .hero-title, .team-name { font-family:"Segoe UI Variable Display","Aptos Display","Trebuchet MS",sans-serif !important; }
-    h3 { color:#172033 !important; font-size:1.18rem !important; font-weight:760 !important; letter-spacing:-.025em !important; margin-top:1.35rem !important; margin-bottom:.65rem !important; }
-    h3::before { content:""; display:inline-block; width:.22rem; height:.9rem; margin-right:.5rem; border-radius:99px; background:var(--merchant-primary); vertical-align:-.04rem; }
+    [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] { gap:var(--space-2); }
+    h3 { color:var(--text) !important; font-size:16px !important; line-height:22px !important; font-weight:650 !important; letter-spacing:-.01em !important; margin:var(--space-3) 0 6px !important; }
+    h3::before { content:""; display:inline-block; width:3px; height:16px; margin-right:var(--space-2); border-radius:2px; background:var(--danger); vertical-align:-2px; }
     h4 { font-weight:760 !important; letter-spacing:-.025em !important; }
     [data-testid="stSidebarNav"] { display:none !important; }
-    [data-testid="stSidebar"] { border-right:1px solid rgba(255,255,255,.35); min-width:280px; max-width:280px; }
+    [data-testid="stSidebar"] { border-right:1px solid var(--border); min-width:176px; max-width:176px; height:100dvh; overflow:hidden !important; box-shadow:none; }
     [data-testid="stSidebar"] > div:first-child { padding-top:0; }
-    [data-testid="stSidebarContent"] { width:100%; min-height:100vh; background:transparent !important; }
-    [data-testid="stSidebarUserContent"] { width:100%; min-height:100vh; padding:1.35rem 1rem 2rem !important; }
+    [data-testid="stSidebarContent"] { width:100%; height:100dvh; overflow:hidden !important; background:transparent !important; }
+    [data-testid="stSidebarUserContent"] { width:100%; height:100%; overflow:hidden !important; padding:var(--space-2) var(--space-3) !important; }
     [data-testid="stSidebar"] [data-testid="stImage"] { display:flex; justify-content:center; background:transparent; border:0; padding:.45rem 0 .8rem; margin:0; box-shadow:none; }
     [data-testid="stSidebar"] [data-testid="stImage"] img { display:block; margin:0 auto; }
-    [data-testid="stPopoverBody"] { min-width:340px; border:1px solid #dfe5ec; border-radius:14px; box-shadow:0 18px 50px rgba(26,31,54,.18); }
+    [data-testid="stPopoverBody"] { min-width:340px; border:1px solid var(--border); border-radius:var(--radius-card); box-shadow:0 16px 40px rgba(26,31,54,.16); }
     [data-testid="stPopover"] { position:fixed; right:0; top:42%; z-index:999999; width:auto !important; }
     [data-testid="stPopover"] > button { min-height:112px; width:38px; padding:.65rem .35rem !important; color:white !important; background:var(--merchant-primary) !important; border:0 !important; border-radius:8px 0 0 8px !important; box-shadow:0 8px 24px rgba(60,66,87,.18); writing-mode:vertical-rl; transform:rotate(180deg); font-size:.72rem; letter-spacing:.04em; }
-    [data-testid="stMetric"] { background:rgba(255,255,255,.3); border:1px solid rgba(255,255,255,.5); border-radius:12px; padding:1rem 1.1rem; box-shadow:0 8px 24px rgba(30,50,80,.04); }
-    [data-testid="stMetricValue"] { color: #172033; }
-    [data-testid="stVegaLiteChart"] { background:transparent !important; border:0; border-radius:0; padding:0; box-shadow:none; backdrop-filter:none; }
+    [data-testid="stMetric"] { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-card); padding:10px var(--space-3); box-shadow:none; }
+    [data-testid="stMetricValue"] { color:#172033; font-size:24px; line-height:28px; }
+    [data-testid="stVegaLiteChart"] { background:transparent !important; border:0; border-radius:0; padding:var(--space-1) var(--space-6) 0 0; box-shadow:none; }
     [data-testid="stVegaLiteChart"] .vega-embed,
     [data-testid="stVegaLiteChart"] canvas,
     [data-testid="stVegaLiteChart"] svg { background:transparent !important; }
-    [data-testid="stVerticalBlockBorderWrapper"] { background:rgba(255,255,255,.3); border-color:rgba(255,255,255,.5) !important; border-radius:12px !important; box-shadow:0 8px 24px rgba(60,66,87,.04); backdrop-filter:blur(14px); }
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        background:transparent !important;
+        background-color:transparent !important;
+        box-shadow:none !important;
+        border:none !important;
+        border-radius:0 !important;
+    }
+    [data-testid="stColumn"] [data-testid="stVerticalBlockBorderWrapper"],
+    [data-testid="stForm"] [data-testid="stVerticalBlockBorderWrapper"] {
+        background:var(--surface) !important;
+        background-color:var(--surface) !important;
+        border:1px solid var(--border) !important;
+        border-radius:var(--radius-card) !important;
+        box-shadow:none !important;
+    }
+    [data-testid="stColumn"] [data-testid="stVerticalBlock"] { gap:var(--space-1); }
     .product-name { color:#29324a; font-size:1.22rem; line-height:1.15; font-weight:750; letter-spacing:-.025em; margin:.35rem 0 .25rem; }
     .product-copy { color:#748096; font-size:.76rem; margin-bottom:.8rem; }
-    .stripe-nav { width:calc(100% + 2rem); min-height:46vh; margin:.55rem -1rem 1rem; padding:.55rem .7rem; border-top:1px solid rgba(94,111,136,.12); border-bottom:1px solid rgba(94,111,136,.12); }
-    .stripe-nav a { display:flex; width:100%; align-items:center; gap:.75rem; color:#4f5d73 !important; text-decoration:none !important; font-size:.88rem; padding:.68rem .75rem; border-radius:7px; }
-    .stripe-nav a:hover { background:rgba(255,255,255,.24); color:#273247 !important; }
-    .stripe-nav a.active { color:var(--merchant-dark) !important; background:rgba(255,255,255,.34); box-shadow:inset 3px 0 0 var(--merchant-primary); font-weight:700; }
+    .stripe-nav { width:100%; margin:var(--space-2) 0 0; padding:var(--space-2) 0 0; border-top:1px solid var(--border); }
+    .stripe-nav a { display:flex; width:40px; height:38px; align-items:center; justify-content:center; color:#536075 !important; text-decoration:none !important; padding:0; margin:0 auto var(--space-2); border-radius:var(--radius-control); }
+    .stripe-nav .nav-label { display:none; }
+    .stripe-nav a:hover { background:#f7f1f2; color:var(--text) !important; }
+    .stripe-nav a.active { color:#a92d39 !important; background:#fcebed; box-shadow:inset 3px 0 0 var(--danger); font-weight:650; }
     [data-testid="stSidebar"] div[data-baseweb="select"] > div { background:transparent; border:0; box-shadow:none; font-weight:700; color:#29324a; padding-left:0; }
-    .nav-icon { width:1.15rem; text-align:center; color:#77839a; }
-    .eyebrow { color: #65728a; font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; }
+    .nav-icon { width:auto; text-align:center; color:#77839a; font-size:14px; }
+    .eyebrow { color:var(--muted); font-size:11px; line-height:16px; font-weight:650; text-transform:uppercase; letter-spacing:.08em; margin-top:0; }
     .status-ok,.status-watch,.status-critical { display:inline-block; padding:.2rem .55rem; border-radius:999px; font-size:.78rem; font-weight:700; }
     .status-ok { color:#08775d; background:#dff7ef; }
     .status-watch { color:#9b5d00; background:#fff0cc; }
     .status-critical { color:#b42318; background:#fee4e2; }
     .incident-card { background:white; border:1px solid #e4eaf2; border-left:5px solid #e5484d; border-radius:14px; padding:1.15rem 1.3rem; margin-bottom:.8rem; }
-    .primary-alert { display:grid; grid-template-columns:1fr auto; gap:1rem; align-items:center; color:#8f1d2c; background:#fff5f6; border:1px solid #efb9c0; border-left:4px solid #dc3545; border-radius:3px; padding:.9rem 1rem; margin:.2rem 0 .75rem; box-shadow:0 2px 5px rgba(60,66,87,.08); }
+    .primary-alert { display:grid; grid-template-columns:minmax(260px,.8fr) minmax(0,1.2fr); min-height:88px; gap:var(--space-4); align-items:center; color:#852431; background:var(--danger-soft); border:1px solid #f0cbd0; border-left:3px solid var(--danger); border-radius:var(--radius-card); padding:10px var(--space-3); margin:0 0 10px; box-shadow:none; }
     .alert-kicker { font-family:"Bahnschrift SemiCondensed","Arial Narrow",sans-serif; font-size:.74rem; font-weight:750; letter-spacing:.12em; }
-    .alert-country { opacity:.78; font-size:.72rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; margin-top:.28rem; }
-    .alert-title { font-size:1.02rem; font-weight:700; margin:.2rem 0 .28rem; }
-    .alert-facts { opacity:.9; font-size:.92rem; }
-    .alert-action { color:white !important; background:#dc3545; text-decoration:none !important; border-radius:3px; padding:.48rem .7rem; font-size:.75rem; font-weight:650; white-space:nowrap; }
+    .alert-country { opacity:.8; font-size:11px; line-height:15px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; margin-top:2px; }
+    .alert-title { font-size:15px; line-height:19px; font-weight:700; margin:1px 0 0; }
+    .alert-side { display:flex; align-items:center; justify-content:flex-end; gap:var(--space-3); min-width:0; }
+    .alert-facts { opacity:.9; font-size:12px; line-height:18px; text-align:right; white-space:nowrap; }
+    .alert-action { color:white !important; background:var(--danger); text-decoration:none !important; border-radius:var(--radius-control); padding:8px var(--space-3); font-size:12px; font-weight:650; white-space:nowrap; }
     .healthy-alert { color:#08775d; background:rgba(232,251,244,.72); border:1px solid rgba(24,157,112,.22); border-radius:18px; padding:1rem 1.2rem; margin:.2rem 0 1rem; backdrop-filter:blur(12px); }
-    .provider-stack { background:rgba(255,255,255,.3); border:1px solid rgba(255,255,255,.5); border-radius:12px; padding:.2rem .75rem; box-shadow:0 8px 24px rgba(60,66,87,.04); backdrop-filter:blur(14px); }
+    .provider-stack { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-card); padding:var(--space-1) var(--space-3); box-shadow:none; }
     .provider-row { display:flex; align-items:center; gap:.7rem; background:transparent; border-bottom:1px solid rgba(95,110,140,.15); padding:.85rem .15rem; }
     .provider-row:last-child { border-bottom:0; }
     .provider-dot { width:.58rem; height:.58rem; flex:0 0 .58rem; border-radius:50%; background:#25b879; box-shadow:0 0 0 4px rgba(37,184,121,.12); }
@@ -167,30 +198,36 @@ st.markdown("""
     .diagnosis-list li:last-child { border-bottom:0; }
     .diagnosis-list li::before { content:""; position:absolute; left:.1rem; top:.82rem; width:.48rem; height:.48rem; border-radius:2px; background:var(--merchant-primary); transform:rotate(45deg); }
     .root-cause-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.6rem; margin:.4rem 0 .75rem; }
-    .cause-item { background:rgba(255,255,255,.3); border:1px solid rgba(255,255,255,.5); border-radius:12px; padding:.7rem .75rem; }
+    .cause-item { background:var(--surface-muted); border:1px solid var(--border); border-radius:var(--radius-control); padding:var(--space-3); }
     .cause-label { color:#69758b; font-size:.68rem; font-weight:750; letter-spacing:.08em; text-transform:uppercase; }
     .cause-value { color:#172033; font-size:1rem; font-weight:800; margin-top:.15rem; }
-    .merchant-hero { color:#3c4257; background:rgba(255,255,255,.3) !important; border:1px solid rgba(255,255,255,.55); border-radius:14px; padding:.9rem 1.1rem; margin-bottom:.75rem; box-shadow:0 8px 26px rgba(60,66,87,.06); backdrop-filter:blur(16px); }
-    .hero-title { font-size:1rem; line-height:1.2; font-weight:650; letter-spacing:0; margin:.35rem 0 .2rem; }
-    .hero-subtitle { color:#697386; font-size:.74rem; }
-    .merchant-hero.rappi-hero { color:#1a1f36; background:rgba(255,255,255,.3) !important; border-color:rgba(255,255,255,.55); }
+    .merchant-hero { color:var(--text); background:var(--surface) !important; border:1px solid var(--border); border-radius:var(--radius-card); padding:10px var(--space-3); margin-bottom:10px; box-shadow:none; }
+    .hero-row { display:flex; align-items:center; gap:var(--space-2); min-width:0; }
+    .hero-title { font-size:20px; line-height:24px; font-weight:700; letter-spacing:-.02em; margin:0; }
+    .hero-subtitle { color:var(--muted); font-size:12px; line-height:16px; margin-top:var(--space-1); }
+    .merchant-hero.rappi-hero { color:var(--text); background:var(--surface) !important; border:1px solid var(--border); }
     .rappi-hero .hero-subtitle { color:#697386; }
     .rappi-hero .live-pill { color:#c2412d; background:#fff0eb; border-color:#ffd7ca; }
-    .live-pill { display:inline-block; color:var(--merchant-dark); background:var(--merchant-soft); border:1px solid rgba(100,110,135,.12); border-radius:999px; padding:.2rem .55rem; font-size:.68rem; font-weight:750; }
-    .kpi-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0; margin:.4rem 0 1rem; background:rgba(255,255,255,.3); border:1px solid rgba(255,255,255,.5); border-radius:12px; box-shadow:0 8px 24px rgba(60,66,87,.04); backdrop-filter:blur(14px); }
-    .kpi-card { position:relative; overflow:hidden; min-width:0; background:transparent; border:0; border-right:1px solid rgba(111,128,151,.16); border-radius:0; padding:.8rem 1rem; box-shadow:none; }
-    .kpi-card::before { content:""; position:absolute; inset:0 auto 0 0; width:2px; background:var(--merchant-primary); }
-    .kpi-label { color:#65728a; font-size:.82rem; font-weight:650; margin-bottom:.48rem; }
-    .kpi-value { color:#152039; font-size:clamp(1.45rem,2.25vw,2.05rem); line-height:1.1; font-weight:780; letter-spacing:-.035em; white-space:nowrap; }
-    .kpi-card.incident { background:linear-gradient(145deg,#d92d3a,#b91f2c) !important; border-color:#a91d28 !important; box-shadow:0 12px 30px rgba(185,31,44,.28); }
-    .kpi-card.incident::before { display:none; }
-    .kpi-card.incident .kpi-label,.kpi-card.incident .kpi-value { color:white !important; }
+    .live-pill { display:inline-block; color:#a92d39; background:#fcebed; border:1px solid #f3cdd2; border-radius:999px; padding:var(--space-1) var(--space-2); font-size:11px; line-height:16px; font-weight:700; }
+    .live-pill::first-letter { animation:live-pulse 1.4s ease-in-out infinite; }
+    .live-note { color:var(--muted); font-size:12px; font-weight:500; margin-left:var(--space-2); text-transform:none; letter-spacing:0; }
+    @keyframes live-pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+    .kpi-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:6px 0 10px; background:transparent; border:0; box-shadow:none; }
+    .kpi-card { position:relative; overflow:hidden; min-height:78px; min-width:0; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-card); padding:10px var(--space-3); box-shadow:none; }
+    .kpi-card::before { display:none; }
+    .kpi-label { color:var(--muted); font-size:12px; line-height:16px; font-weight:600; margin-bottom:var(--space-1); }
+    .kpi-value { color:var(--text); font-size:26px; line-height:28px; font-weight:750; letter-spacing:-.03em; white-space:nowrap; }
+    .kpi-card.incident { background:var(--surface) !important; border-color:#efc8cd !important; box-shadow:none; }
+    .kpi-card.incident::after { content:""; position:absolute; top:var(--space-4); right:var(--space-4); width:8px; height:8px; border-radius:50%; background:var(--danger); }
+    .kpi-card.incident .kpi-label { color:var(--muted) !important; }
+    .kpi-card.incident .kpi-value { color:var(--danger) !important; }
     .kpi-link { color:inherit !important; text-decoration:none !important; display:block; }
     .kpi-link .kpi-card { transition:transform .18s ease,box-shadow .18s ease; }
-    .kpi-link:hover .kpi-card { transform:translateY(-3px); box-shadow:0 16px 34px rgba(185,31,44,.35); }
+    .kpi-link:hover .kpi-card { transform:translateY(-2px); border-color:#dcaeb4 !important; box-shadow:var(--shadow); }
     .injector-shell { background:linear-gradient(145deg,rgba(255,255,255,.96),var(--merchant-soft)); border:1px solid rgba(210,220,234,.9); border-radius:20px; padding:1rem 1.2rem; margin:.5rem 0 1rem; }
-    @media (max-width:900px) { .kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-    @media (max-width:540px) { .kpi-grid { grid-template-columns:1fr; } }
+    @media (max-width:900px) { .block-container { padding-inline:var(--space-6); } .kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-width:900px) { .primary-alert { grid-template-columns:1fr; } .alert-side { justify-content:space-between; } .alert-facts { text-align:left; white-space:normal; } }
+    @media (max-width:640px) { .block-container { padding-inline:var(--space-4); } .kpi-grid { grid-template-columns:1fr; } .alert-side { align-items:flex-start; flex-direction:column; } }
 </style>
 """, unsafe_allow_html=True)
 
@@ -210,12 +247,12 @@ with st.sidebar:
         )
     st.markdown(
         '<nav class="stripe-nav">'
-        '<a class="active" href="#overview"><span class="nav-icon">⌂</span>Overview</a>'
-        '<a href="#incidents"><span class="nav-icon">▤</span>Incidents</a>'
-        '<a href="#monitoring"><span class="nav-icon">⌁</span>Monitoring</a>'
-        '<a href="#countries"><span class="nav-icon">◎</span>Countries</a>'
-        '<a href="#diagnosis"><span class="nav-icon">◇</span>Providers</a>'
-        '<a href="#report"><span class="nav-icon">▣</span>Reports</a>'
+        '<a class="active" href="#overview" title="Overview" aria-label="Overview"><span class="nav-icon">⌂</span><span class="nav-label">Overview</span></a>'
+        '<a href="#incidents" title="Incidents" aria-label="Incidents"><span class="nav-icon">▤</span><span class="nav-label">Incidents</span></a>'
+        '<a href="#monitoring" title="Monitoring" aria-label="Monitoring"><span class="nav-icon">⌁</span><span class="nav-label">Monitoring</span></a>'
+        '<a href="#countries" title="Countries" aria-label="Countries"><span class="nav-icon">◎</span><span class="nav-label">Countries</span></a>'
+        '<a href="#diagnosis" title="Providers" aria-label="Providers"><span class="nav-icon">◇</span><span class="nav-label">Providers</span></a>'
+        '<a href="#report" title="Reports" aria-label="Reports"><span class="nav-icon">▣</span><span class="nav-label">Reports</span></a>'
         '</nav>',
         unsafe_allow_html=True,
     )
@@ -325,26 +362,38 @@ st.markdown(
     <style>
         :root {{ --merchant-primary: {theme['primary']}; --merchant-dark: {theme['dark']}; --merchant-soft: {theme['soft']}; --merchant-background: {theme['background']}; --merchant-accent: {theme['accent']}; }}
         .event-name,.team-name {{ color: var(--merchant-dark); }}
-        .merchant-hero {{ background:rgba(255,255,255,.3) !important; }}
-        [data-testid="stAppViewContainer"] {{
-            background:
-                radial-gradient(circle at 88% 5%, var(--merchant-primary) -35%, transparent 38rem),
-                linear-gradient(135deg,var(--merchant-background) 0%,var(--merchant-soft) 52%,var(--merchant-background) 125%);
-            background-attachment:fixed;
-        }}
-        [data-testid="stSidebar"] {{ background:var(--merchant-background); }}
-        [data-testid="stMetric"]:hover {{ border-color: var(--merchant-primary); transform: translateY(-2px); transition: .18s ease; }}
+        .merchant-hero {{ background:var(--surface) !important; }}
+        [data-testid="stAppViewContainer"] {{ background:#eef2f6; }}
+        [data-testid="stSidebar"] {{ background:var(--surface); }}
+        [data-testid="stMetric"]:hover {{ border-color:var(--border); }}
         div[data-baseweb="select"] > div:focus-within {{ border-color: var(--merchant-primary); box-shadow: 0 0 0 1px var(--merchant-primary); }}
     </style>
-    <div id="overview"></div>
-    <div class="{hero_class}">
-        <span class="live-pill">● LIVE MONITORING</span>
-        <div class="hero-title">{merchant} Payment Control Tower</div>
-        <div class="hero-subtitle">Unified payment monitoring across Mexico, Brazil and Colombia — Updated {data['updated']}</div>
-    </div>
     """,
     unsafe_allow_html=True,
 )
+
+
+@st.fragment(run_every="2s")
+def render_live_header() -> None:
+    tick = st.session_state.get("header_live_tick", 0) + 1
+    st.session_state["header_live_tick"] = tick
+    seconds_ago = (tick * 2) % 6
+    st.markdown(
+        f"""
+        <div id="overview"></div>
+        <div class="{hero_class}">
+            <div class="hero-row">
+                <span class="live-pill">● LIVE MONITORING</span>
+                <div class="hero-title">{merchant} Payment Control Tower</div>
+            </div>
+            <div class="hero-subtitle">Unified payment monitoring across Mexico, Brazil and Colombia — Updated {seconds_ago} seconds ago</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+render_live_header()
 
 st.markdown('<div id="incidents"></div>', unsafe_allow_html=True)
 if incident:
@@ -356,13 +405,15 @@ if incident:
                 <div class="alert-kicker">🚨 ACTIVE INCIDENT</div>
                 <div class="alert-country">{incident['country']}</div>
                 <div class="alert-title">{incident['title']}</div>
+            </div>
+            <div class="alert-side">
                 <div class="alert-facts">
                     Approval {incident_country['expected']:.1f}% → {incident_country['approval']:.1f}%
                     &nbsp; · &nbsp; Estimated loss US$ {incident_country['loss']:,.0f}
                     &nbsp; · &nbsp; Confidence {incident['confidence']:.0%}
                 </div>
+                <a class="alert-action" href="#incident-detail">View diagnosis ↓</a>
             </div>
-            <a class="alert-action" href="#incident-detail">View diagnosis ↓</a>
         </div>
         """,
         unsafe_allow_html=True,
@@ -373,54 +424,82 @@ else:
         unsafe_allow_html=True,
     )
 
-st.markdown('<div id="report"></div><div class="eyebrow">Executive summary</div>', unsafe_allow_html=True)
+@st.fragment(run_every="2s")
+def render_live_summary() -> None:
+    tick = st.session_state.get("live_demo_tick", 0) + 1
+    st.session_state["live_demo_tick"] = tick
+    approval_pattern = (0.0, 0.1, -0.1, 0.2, 0.1, -0.2)
+    live_approval = max(0.0, min(100.0, weighted_approval + approval_pattern[tick % len(approval_pattern)]))
+    live_transactions = total_transactions + tick * 37
+    incident_class = " incident" if active_incidents else ""
 
-incident_class = " incident" if active_incidents else ""
-st.markdown(
-    f"""
-    <div class="kpi-grid">
-        <div class="kpi-card">
-            <div class="kpi-label">Approval rate</div>
-            <div class="kpi-value">{weighted_approval:.1f}%</div>
-        </div>
-        <div class="kpi-card">
-            <div class="kpi-label">Transactions</div>
-            <div class="kpi-value">{total_transactions:,}</div>
-        </div>
-        <a class="kpi-link" href="#incident-detail">
-            <div class="kpi-card{incident_class}">
-                <div class="kpi-label">Active incidents</div>
-                <div class="kpi-value">{active_incidents}</div>
+    st.markdown(
+        '<div id="report"></div><div class="eyebrow">Executive summary'
+        '<span class="live-note">Updates every 2 seconds</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""
+        <div class="kpi-grid">
+            <div class="kpi-card">
+                <div class="kpi-label">Approval rate · live</div>
+                <div class="kpi-value">{live_approval:.1f}%</div>
             </div>
-        </a>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+            <div class="kpi-card">
+                <div class="kpi-label">Transactions · live</div>
+                <div class="kpi-value">{live_transactions:,}</div>
+            </div>
+            <a class="kpi-link" href="#incident-detail">
+                <div class="kpi-card{incident_class}">
+                    <div class="kpi-label">Active incidents</div>
+                    <div class="kpi-value">{active_incidents}</div>
+                </div>
+            </a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+render_live_summary()
 
 st.markdown('<div id="monitoring"></div>', unsafe_allow_html=True)
 st.markdown("### Approval rate — live")
-chart_rows = []
-for country, approvals in data["trend"].items():
-    expected = countries[country]["expected"]
-    for index, approval in enumerate(approvals):
-        drop = approval - expected
-        chart_rows.append(
-            {
-                "window": index + 1,
-                "country": country,
-                "approval": approval,
-                "expected": expected,
-                "difference": drop,
-                "status": "Critical drop" if drop <= -8 else "Normal",
-            }
+
+
+@st.fragment(run_every="2s")
+def render_live_chart() -> None:
+    tick = st.session_state.get("chart_live_tick", 0) + 1
+    st.session_state["chart_live_tick"] = tick
+    live_trends = deepcopy(data["trend"])
+    movement = (0.0, 0.1, -0.1, 0.2, 0.1, -0.2)
+    for offset, approvals in enumerate(live_trends.values()):
+        approvals[-1] = round(
+            max(0.0, min(100.0, approvals[-1] + movement[(tick + offset) % len(movement)])),
+            1,
         )
 
-st.vega_lite_chart(chart_rows, {
+    chart_rows = []
+    for country, approvals in live_trends.items():
+        expected = countries[country]["expected"]
+        for index, approval in enumerate(approvals):
+            drop = approval - expected
+            chart_rows.append(
+                {
+                    "window": index + 1,
+                    "country": country,
+                    "approval": approval,
+                    "expected": expected,
+                    "difference": drop,
+                    "status": "Critical drop" if drop <= -8 else "Normal",
+                }
+            )
+
+    st.vega_lite_chart(chart_rows, {
         "background": "transparent",
         "layer": [
             {
-                "mark": {"type": "line", "strokeWidth": 3.5, "strokeCap": "round"},
+                "mark": {"type": "line", "strokeWidth": 2.5, "strokeCap": "round"},
                 "encoding": {
                     "x": {"field": "window", "type": "ordinal", "title": "Latest windows"},
                     "y": {"field": "approval", "type": "quantitative", "scale": {"domain": [55, 100]}, "title": "Approval %"},
@@ -448,7 +527,7 @@ st.vega_lite_chart(chart_rows, {
             },
             {
                 "transform": [{"filter": "datum.status === 'Critical drop'"}],
-                "mark": {"type": "point", "filled": True, "size": 145, "color": "#dc2638", "stroke": "white", "strokeWidth": 2.5},
+                "mark": {"type": "point", "filled": True, "size": 90, "color": "#dc2638", "stroke": "white", "strokeWidth": 2},
                 "encoding": {
                     "x": {"field": "window", "type": "ordinal"},
                     "y": {"field": "approval", "type": "quantitative"},
@@ -474,8 +553,11 @@ st.vega_lite_chart(chart_rows, {
             "axis": {"gridColor": "rgba(90,105,135,.15)", "domain": False, "tickColor": "transparent", "labelColor": "#68758c", "titleColor": "#68758c"},
             "legend": {"labelColor": "#68758c", "titleColor": "#68758c"},
         },
-        "height": 280,
-}, use_container_width=True)
+        "height": 340,
+    }, use_container_width=True)
+
+
+render_live_chart()
 
 st.markdown('<div id="countries"></div>', unsafe_allow_html=True)
 st.markdown("### Country status")

@@ -714,5 +714,22 @@ Merchant colors remain accents, while incident red is reserved for operational a
 The Streamlit implementation approximates the reference layout and does not reproduce
 Stripe's proprietary components or interactions exactly.
 
+## DEC-028 — Use a deterministic live-demo ticker until the simulator API is available
+
+### Decision
+Refresh the approval-rate and transaction KPIs every two seconds with a deterministic
+Streamlit fragment while the live simulator and streaming endpoints are still pending.
+The fragment updates only the dashboard summary and does not reload the page or expose
+Judge Lab injection configuration to the detector.
+
+### Why
+- the Control Tower must visibly feel live during the demo;
+- the current backend contains shared contracts but no live simulator endpoint;
+- fragment-scoped refresh preserves Judge Lab interaction and avoids full-page reruns.
+
+### Tradeoff
+The changing values are demo data, not real transaction batches. Replace the ticker with
+polling against the simulator API as soon as the simulator track exposes its endpoint.
+
 Update this file whenever the team makes a meaningful change that could come up in technical defense.
 
