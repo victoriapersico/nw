@@ -24,8 +24,8 @@ post-MVP y no puede convertir una ejecución en failure.
 
 ## Cómo se ejecuta
 
-Una vez que MVP-02 y MVP-05 entren a la rama, crear un adapter pequeño que cumpla
-el protocolo `EvaluationRuntime` en `backend.evaluation.harness`. Debe exponer:
+El adapter real ya vive en `backend.integration.evaluation_runtime` y cumple el
+protocolo `EvaluationRuntime` en `backend.evaluation.harness`:
 
 ```text
 reset(scenario)
@@ -35,17 +35,16 @@ detect(DetectionRequest) -> DetectionResponse
 diagnose(Incident) -> Diagnosis
 ```
 
-Después, una ejecución genera ambos artefactos:
+Una ejecución reproducible de los treinta escenarios genera ambos artefactos:
 
 ```powershell
-python -m backend.evaluation --runtime backend.integration.evaluation_runtime:build_runtime --output artifacts/evaluation
+python -m backend.evaluation --output artifacts/evaluation
 ```
 
 - `artifacts/evaluation/evaluation_results.json`: machine-readable.
 - `artifacts/evaluation/evaluation_summary.md`: resumen legible y tabla pass/fail.
 
-Mientras el runtime no esté mergeado se puede inspeccionar la especificación sin
-simular nada:
+Para inspeccionar sólo la especificación, sin simular nada:
 
 ```powershell
 python -m backend.evaluation --list
@@ -57,3 +56,8 @@ El reporte calcula recall de detección, false-positive rate, exactitud de causa
 separación de incidentes, exactitud de abstención y latencia media. El error de
 loss queda explícitamente como no disponible hasta que el runtime exponga la
 pérdida sintética ground-truth; no se inventa una métrica para el pitch.
+
+MVP-07 todavía no está integrado, así que el adapter devuelve
+`insufficient_evidence` para incidentes detectados en vez de inventar causas. Eso
+permite ejecutar y medir el pipeline hoy; cuando RCA esté disponible, se reemplaza
+sólo `diagnose()` para que las expectativas de causas también puedan pasar.

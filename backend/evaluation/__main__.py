@@ -14,6 +14,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run Control Tower synthetic evaluation.")
     parser.add_argument(
         "--runtime",
+        default="backend.integration.evaluation_runtime:build_runtime",
         help="Factory path module:function returning an EvaluationRuntime adapter.",
     )
     parser.add_argument("--output", default="artifacts/evaluation")

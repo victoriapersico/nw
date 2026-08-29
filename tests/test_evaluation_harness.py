@@ -136,3 +136,9 @@ def test_harness_evaluates_observed_cause_from_diagnosis_evidence() -> None:
     assert result.incident_count == 1
     assert report.metrics["detection_recall"] == 1.0
     assert report.metrics["root_cause_accuracy"] == 1.0
+
+
+def test_low_volume_abstention_passes_without_a_created_incident() -> None:
+    result = EvaluationHarness(QuietRuntime()).run([SCENARIOS[25]]).results[0]
+
+    assert result.passed

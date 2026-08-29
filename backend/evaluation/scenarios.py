@@ -20,6 +20,7 @@ from backend.schemas import (
 
 
 ExpectedOutcome = Literal["no_alert", "incident", "insufficient_evidence", "optional"]
+DEFAULT_LIVE_VOLUME_PER_WINDOW = 1_200
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ class ScenarioDefinition:
     start_at: datetime
     expectation: ScenarioExpectation
     injections: tuple[InjectionConfig, ...] = ()
-    volume_per_window: int = 100
+    volume_per_window: int = DEFAULT_LIVE_VOLUME_PER_WINDOW
     evaluation_windows: int = 4
     directives: tuple[str, ...] = ()
     notes: str = ""
@@ -210,7 +211,7 @@ def _scenario(
     issuing_bank: str | None = None,
     decline_code: str | None = None,
     target: float | None = None,
-    volume_per_window: int = 100,
+    volume_per_window: int = DEFAULT_LIVE_VOLUME_PER_WINDOW,
     directives: tuple[str, ...] = (),
 ) -> ScenarioDefinition:
     injections = ()

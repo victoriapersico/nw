@@ -206,6 +206,11 @@ def _evaluate_expectation(
 
     diagnoses = [item.diagnosis for item in observations if item.diagnosis is not None]
     if expectation.outcome == "insufficient_evidence":
+        # A low-volume slice may correctly be filtered before an Incident exists;
+        # that is an abstention, not a failed expectation. If an incident reaches
+        # RCA, it must explicitly abstain through Diagnosis.
+        if not observations:
+            return mismatches, False
         if not any(
             diagnosis.diagnosis_status == "insufficient_evidence" for diagnosis in diagnoses
         ):
