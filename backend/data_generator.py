@@ -178,7 +178,7 @@ def generate_hourly_transactions(*, seed: int, hour_start: datetime) -> list[Tra
 
     for merchant in MERCHANTS:
         for country in COUNTRIES:
-            expected_volume = _expected_hourly_volume(
+            expected_volume = expected_hourly_volume(
                 merchant=merchant, country=country, hour_start=hour_start
             )
             transaction_count = max(
@@ -190,7 +190,7 @@ def generate_hourly_transactions(*, seed: int, hour_start: datetime) -> list[Tra
                 provider = _weighted_choice(rng, PROVIDER_WEIGHTS[country])
                 payment_method = _weighted_choice(rng, PAYMENT_METHOD_WEIGHTS[country])
                 issuing_bank = _weighted_choice(rng, BANK_WEIGHTS[country])
-                approval_rate = _expected_approval_rate(
+                approval_rate = expected_approval_rate(
                     merchant=merchant,
                     country=country,
                     provider=provider,
@@ -252,6 +252,8 @@ def validate_transaction_frame(dataframe: pd.DataFrame) -> int:
         raise ValueError(f"dataframe is missing transaction columns: {missing}")
 
     for row in dataframe.loc[:, TRANSACTION_COLUMNS].to_dict(orient="records"):
+        if pd.isna(row["decline_code"]):
+            row["decline_code"] = None
         Transaction.model_validate(row)
     return len(dataframe)
 
@@ -282,7 +284,11 @@ def _hour_seed(*, seed: int, hour_start: datetime) -> int:
     return int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
 
 
-def _expected_hourly_volume(*, merchant: str, country: str, hour_start: datetime) -> float:
+def expected_hourly_volume(
+    *, merchant: str, country: str, hour_start: datetime
+) -> float:
+    """Return the shared normal volume weight for a merchant-country hour."""
+
     return (
         BASE_HOURLY_VOLUME[merchant]
         * COUNTRY_VOLUME_MULTIPLIER[country]
@@ -344,7 +350,7 @@ def _merchant_month_volume_multiplier(merchant: str, month: int) -> float:
     return 1.28 if month == 7 else 1.25 if month == 12 else 1.2 if month == 1 else 1.0
 
 
-def _expected_approval_rate(
+def expected_approval_rate(
     *,
     merchant: str,
     country: str,
@@ -353,6 +359,8 @@ def _expected_approval_rate(
     issuing_bank: str,
     hour_start: datetime,
 ) -> float:
+    """Return the shared normal approval probability for a payment context."""
+
     rate = (
         BASE_APPROVAL_RATE[merchant][country]
         + PROVIDER_APPROVAL_ADJUSTMENT[provider]
