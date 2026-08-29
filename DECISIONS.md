@@ -786,6 +786,49 @@ MVP-06 will combine severity with estimated loss, confidence, and persistence to
 
 ---
 
+## DEC-029 — MVP-06 prioritizes without changing the Incident contract
+
+### Decision
+Do not add `priority`, `confidence`, or relationship fields to the frozen `Incident` contract for the first MVP-06 implementation.
+
+Incidents are ordered externally using existing fields:
+
+```text
+severity → estimated_loss → anomaly_score → conversion_drop_pp
+```
+
+`anomaly_score` is the initial proxy for statistical confidence.
+
+### Why
+- The current contract already supports deterministic ordering.
+- Adding fields unilaterally would create avoidable integration risk for the other tracks.
+- Priority is derived data and does not need to be persisted in each incident.
+
+### Tradeoff
+The dashboard does not receive a separately named confidence value from the incident engine yet.
+
+### Revisit
+If the dashboard, evaluation harness, or RCA needs an explicit confidence field that cannot be derived from anomaly evidence.
+
+---
+
+## DEC-030 — MVP-06 deduplicates only exact incident identities
+
+### Decision
+Do not deduplicate incidents merely because they share `merchant` and `country`.
+For the current contract, only equal `incident_id` values are treated as duplicate representations of the same incident.
+
+### Why
+Two independent payment problems can affect the same merchant and country. MVP-05 does not yet carry enough slice detail (provider, method, bank) for the incident engine to safely merge them.
+
+### Tradeoff
+The dashboard can temporarily show multiple incidents for the same merchant-country scope until RCA adds finer evidence.
+
+### Revisit
+When detector incidents include a stable affected-slice identity, extend the duplicate key with provider, payment method, issuing bank, and other supported dimensions.
+
+---
+
 # Adding a new decision
 
 Append decisions using:
