@@ -704,6 +704,60 @@ provider plus compliance requirements are in scope.
 
 ---
 
+## DEC-027 — Detector uses seasonal deviation and per-slice persistence
+
+### Alternatives considered
+1. Alert on any raw conversion decrease.
+2. Alert after one unusual live window.
+3. Compare each merchant-country live group to its seasonal baseline and require repeated statistical degradation.
+
+### Decision
+MVP-05 evaluates each `merchant x country` group independently. It calculates actual approval conversion for the live batch, compares it to the expected baseline conversion, and computes:
+
+```text
+conversion_drop_pp = (expected_conversion - actual_conversion) x 100
+z_score = (actual_conversion - expected_conversion) / sqrt(baseline_variance / live_volume)
+```
+
+An incident candidate must meet configured volume, conversion-drop, and z-score thresholds for the configured number of consecutive windows. The persistence counter is tracked separately for each `(merchant, country)` key.
+
+### Why
+- A raw decrease is not enough without seasonal context.
+- Repeated windows reduce noise-based false positives.
+- Independent counters allow simultaneous incidents in different merchants or countries.
+- The approach remains explainable and directly testable.
+
+### Tradeoff
+The first alert is delayed until the persistence threshold is met, and a broad merchant-country incident may contain multiple finer causes that RCA resolves later.
+
+### Revisit
+After MVP-06 and evaluation scenarios 22-25 demonstrate whether additional slice-level detection or grouping is required.
+
+---
+
+## DEC-028 — Initial incident severity is based on approval-rate drop
+
+### Decision
+MVP-05 assigns a preliminary severity from the measured conversion drop:
+
+```text
+critical: drop >= 30pp
+high:     drop >= 20pp
+medium:   drop >= 12pp
+low:      drop >= configured minimum drop
+```
+
+### Why
+This is deterministic, immediately explainable, and available when an incident is first emitted.
+
+### Tradeoff
+Conversion drop alone is not a complete business priority measure; a small high-value incident can deserve more attention than a large low-value one.
+
+### Revisit
+MVP-06 will combine severity with estimated loss, confidence, and persistence to prioritize simultaneous incidents.
+
+---
+
 # Adding a new decision
 
 Append decisions using:
