@@ -612,6 +612,34 @@ Frozen contracts let each track work independently with mocks/fixtures.
 
 ---
 
+## DEC-024 — Deterministic hourly historical generator
+
+### Alternatives considered
+1. Generate each transaction independently without a temporal model.
+2. Generate history by hourly merchant-country windows with deterministic local
+   random streams.
+
+### Decision
+Use option 2 in `backend.data_generator`. A seed plus an hourly timestamp derives
+the random stream for that hour. The generator returns a pandas DataFrame with
+derived `split` and `hour_of_week` columns, while every raw row is first validated
+as a `Transaction`.
+
+### Why
+- matches the `merchant × country × hour_of_week` baseline;
+- preserves normal seasonal variation without hidden incidents;
+- makes a single hour reproducible in isolation for debugging and fixtures;
+- supports local CSV persistence without a database.
+
+### Tradeoff
+Generating a complete year takes longer than a tiny static fixture. The caller can
+generate a shorter hourly-aligned interval while developing.
+
+### Revisit
+Only if profiling shows a full-year DataFrame is too slow for the demo machine.
+
+---
+
 # Adding a new decision
 
 Append decisions using:
