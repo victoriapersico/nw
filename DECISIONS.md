@@ -859,6 +859,27 @@ When detector incidents include a stable affected-slice identity, extend the dup
 
 ---
 
+## DEC-031 — MVP-08 preserves deterministic RCA facts
+
+### Decision
+MVP-08 receives the deterministic `Diagnosis` output produced by MVP-07 and
+uses the language model only to author `explanation` and `recommended_action`.
+It preserves status, dimensions, evidence, and confidence locally.
+
+### Why
+MVP-07 already returns a schema-valid deterministic diagnosis. Preserving its
+facts avoids a breaking contract rewrite and prevents the language model from
+modifying statistical diagnosis.
+
+### Tradeoff
+The first AI layer is a narrative enrichment over the existing Diagnosis model,
+rather than a newly named EvidencePackage-to-Diagnosis boundary.
+
+### Revisit
+When the team schedules a coordinated, additive EvidencePackage contract change.
+
+---
+
 # Adding a new decision
 
 Append decisions using:
