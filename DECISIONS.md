@@ -678,6 +678,32 @@ Only after MVP-06 is stable and the dashboard needs a derived cross-country inci
 
 ---
 
+## DEC-026 — Escrow or payment holds are post-MVP only
+
+### Decision
+Do not implement escrow, funds custody, or automatic payment holds in the Control
+Tower MVP. Retain it as a possible future integration for marketplace-style flows.
+
+### Why
+The MVP monitors transactions and recommends actions; it does not move, retain,
+or release money. Escrow would require payment-provider integrations, a ledger,
+compliance, auditability, and explicit operational approval.
+
+### Future direction
+If later approved, the safe progression is:
+
+```text
+detected incident → recommendation to review or hold → human approval → payment-provider action
+```
+
+The detector must not initiate a hold automatically.
+
+### Revisit
+Only after the core monitoring MVP is stable and a licensed payment/custody
+provider plus compliance requirements are in scope.
+
+---
+
 # Adding a new decision
 
 Append decisions using:
