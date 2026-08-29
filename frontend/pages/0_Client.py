@@ -1,5 +1,8 @@
 """Merchant-scoped client dashboard for the Control Tower MVP."""
 
+import os
+import requests
+
 from copy import deepcopy
 from typing import Any
 
@@ -7,6 +10,99 @@ import streamlit as st
 
 from backend.schemas import COUNTRY_ISSUING_BANKS, COUNTRY_PAYMENT_METHODS, InjectionConfig
 
+API_BASE_URL = os.getenv(
+    "CONTROL_TOWER_API_URL",
+    "http://127.0.0.1:8000",
+)
+
+def fetch_merchant_incidents(
+    merchant: str,
+) -> list[dict[str, Any]] | None:
+    """Return None only when the local API is unavailable."""
+
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/merchants/{merchant}/incidents",
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()["incidents"]
+    except requests.RequestException:
+        return None
+
+
+def render_approval_chart(
+    trends: dict[str, list[float]],
+    country_metrics: dict[str, dict[str, Any]],
+    theme: dict[str, str],
+) -> None:
+    """Render a dependency-free SVG chart for Windows demo environments."""
+
+    colors = [theme["primary"], theme["accent"], theme["dark"]]
+    width, height = 920, 280
+    left, right, top, bottom = 52, 24, 20, 42
+    chart_width = width - left - right
+    chart_height = height - top - bottom
+    minimum, maximum = 55.0, 100.0
+
+    def point(index: int, value: float, count: int) -> tuple[float, float]:
+        x = left + (chart_width * index / max(count - 1, 1))
+        y = top + (maximum - value) * chart_height / (maximum - minimum)
+        return x, y
+
+    grid = "".join(
+        f'<line x1="{left}" x2="{width - right}" y1="{point(0, tick, 2)[1]:.1f}" '
+        f'y2="{point(0, tick, 2)[1]:.1f}" stroke="rgba(90,105,135,.16)" />'
+        f'<text x="8" y="{point(0, tick, 2)[1] + 4:.1f}" fill="#68758c" font-size="11">{tick}%</text>'
+        for tick in (60, 70, 80, 90, 100)
+    )
+    lines: list[str] = []
+    legend: list[str] = []
+    for color, (country, approvals) in zip(colors, trends.items()):
+        points = " ".join(
+            f"{x:.1f},{y:.1f}"
+            for index, value in enumerate(approvals)
+            for x, y in [point(index, value, len(approvals))]
+        )
+        expected = country_metrics[country]["expected"]
+        expected_y = point(0, expected, 2)[1]
+        lines.append(
+            f'<line x1="{left}" x2="{width - right}" y1="{expected_y:.1f}" '
+            f'y2="{expected_y:.1f}" stroke="{color}" stroke-opacity=".32" '
+            'stroke-dasharray="5 5" />'
+            f'<polyline points="{points}" fill="none" stroke="{color}" '
+            'stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" />'
+        )
+        for index, approval in enumerate(approvals):
+            x, y = point(index, approval, len(approvals))
+            critical = approval - expected <= -8
+            marker = "#dc2638" if critical else color
+            radius = "5" if critical else "3"
+            lines.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius}" fill="{marker}" '
+                'stroke="white" stroke-width="1.5" />'
+            )
+        legend.append(
+            f'<span><i style="background:{color}"></i>{country} '
+            f'({approvals[-1]:.1f}% / expected {expected:.1f}%)</span>'
+        )
+
+    chart = f"""
+    <div class="approval-chart">
+        <svg viewBox="0 0 {width} {height}" role="img" aria-label="Live approval rate by country">
+            {grid}{''.join(lines)}
+            <text x="{width / 2 - 36:.1f}" y="{height - 10}" fill="#68758c" font-size="11">Latest windows</text>
+        </svg>
+        <div class="approval-legend">{''.join(legend)}</div>
+    </div>
+    """
+    st.markdown(chart, unsafe_allow_html=True)
+
+
+def render_approval_chart_legacy(*_args: Any, **_kwargs: Any) -> None:
+    """Compatibility shim that avoids Streamlit's blocked pyarrow transport."""
+
+    render_approval_chart(data["trend"], countries, theme)
 
 # Contract-shaped mocks until the live backend is integrated. Each merchant owns
 # a separate payload so switching companies can never mix their information.
@@ -280,8 +376,37 @@ with st.popover("⚙ Judge Lab"):
                 target_approval_rate=target_rate / 100,
                 duration_windows=6,
             )
-            st.session_state["active_injection"] = config.model_dump()
-            st.rerun()
+
+            try:
+                response = requests.post(
+                    f"{API_BASE_URL}/injections",
+                    json={"config": config.model_dump(mode="json")},
+                    timeout=30,
+                )
+                response.raise_for_status()
+                result = response.json()
+
+                st.session_state["last_injection"] = {
+                    **config.model_dump(mode="json"),
+                    "injection_id": result["injection_id"],
+                }
+                st.rerun()
+            except requests.RequestException as exc:
+                st.error(f"Could not create the test injection: {exc}")
+
+        last_injection = st.session_state.get("last_injection")
+        if last_injection:
+            st.success(
+                f"Submitted to simulator: {last_injection['injection_id']}"
+            )
+            st.caption(
+                "The detector only receives the generated transactions, "
+                "never this configuration."
+            )
+            if st.button("Clear local notice", use_container_width=True):
+                del st.session_state["last_injection"]
+                st.rerun()
+
 
         if st.session_state.get("active_injection"):
             active = st.session_state["active_injection"]
@@ -293,70 +418,93 @@ with st.popover("⚙ Judge Lab"):
 
 data = deepcopy(MERCHANT_DATA[merchant])
 theme = MERCHANT_THEMES[merchant]
-active_injection = st.session_state.get("active_injection")
-if active_injection and active_injection["merchant"] == merchant:
-    injected_country = active_injection["country"]
-    target_approval = active_injection["target_approval_rate"] * 100
-    country_state = data["countries"][injected_country]
-    previous_approval = country_state["approval"]
-    country_state["approval"] = target_approval
-    country_state["status"] = (
-        "Critical" if country_state["expected"] - target_approval >= 8 else "Attention"
-    )
-    country_state["loss"] = max(
-        country_state["loss"],
-        round(
-            country_state["transactions"]
-            * max(country_state["expected"] - target_approval, 0)
-            / 100
-            * 42
-        ),
-    )
-    trend = data["trend"][injected_country]
-    trend[-2] = round((previous_approval + target_approval) / 2, 1)
-    trend[-1] = round(target_approval, 1)
+hero_class = "merchant-hero rappi-hero" if merchant == "Rappi" else "merchant-hero"
+
+live_incidents = fetch_merchant_incidents(merchant)
+
+# When the API is available, it is the source of truth: no synthetic UI
+
+if live_incidents is not None:
+    data["updated"] = "just now"
+    data["incident"] = None
+
+    if live_incidents:
+        primary = live_incidents[0]
+        raw_incident = primary["incident"]
+        diagnosis = primary["diagnosis"]
+        evidence = diagnosis["evidence"]
+
+        country_state = data["countries"][raw_incident["country"]]
+        country_state["approval"] = raw_incident["actual_conversion"] * 100
+        country_state["expected"] = raw_incident["expected_conversion"] * 100
+        country_state["transactions"] = raw_incident["affected_volume"]
+        country_state["loss"] = raw_incident["estimated_loss"]
+        country_state["status"] = {
+            "low": "Stable",
+            "medium": "Attention",
+            "high": "Critical",
+            "critical": "Critical",
+        }[raw_incident["severity"]]
+
+        trend = data["trend"][raw_incident["country"]]
+        trend[-2] = round(raw_incident["expected_conversion"] * 100, 1)
+        trend[-1] = round(raw_incident["actual_conversion"] * 100, 1)
+
+        dimension_labels = {
+            "merchant": "Merchant",
+            "country": "Country",
+            "provider": "Provider",
+            "payment_method": "Method",
+            "issuing_bank": "Issuing bank",
+            "decline_code": "Decline code",
+            "intersection": "Intersection",
+        }
+        root_cause = {"Country": raw_incident["country"]}
+        for item in evidence:
+            root_cause[dimension_labels[item["dimension"]]] = item["value"]
+
+        affected_slice = ", ".join(
+            f"{dimension_labels[item['dimension']]}: {item['value']}"
+            for item in evidence
+        ) or "general payment traffic"
+
+        data["incident"] = {
+            "severity": raw_incident["severity"].title(),
+            "country": raw_incident["country"],
+            "title": f"Approval degradation — {affected_slice}",
+            "root_cause": root_cause,
+            "diagnosis": diagnosis["explanation"],
+            "diagnosis_points": [
+                (
+                    f"{dimension_labels[item['dimension']]}: "
+                    f"{item['value']} "
+                    f"({item['baseline_metric']:.1%} → "
+                    f"{item['live_metric']:.1%})"
+                )
+                for item in evidence
+            ],
+            "recommendation": diagnosis["recommended_action"],
+            "confidence": diagnosis["confidence"],
+        }
 
 countries = data["countries"]
 total_transactions = sum(item["transactions"] for item in countries.values())
 total_loss = sum(item["loss"] for item in countries.values())
-weighted_approval = sum(item["approval"] * item["transactions"] for item in countries.values()) / total_transactions
-weighted_expected = sum(item["expected"] * item["transactions"] for item in countries.values()) / total_transactions
-active_incidents = 1 if data["incident"] else 0
-if active_injection and active_injection["merchant"] == merchant:
-    active_incidents = 1
+weighted_approval = (
+    sum(item["approval"] * item["transactions"] for item in countries.values())
+    / total_transactions
+)
+weighted_expected = (
+    sum(item["expected"] * item["transactions"] for item in countries.values())
+    / total_transactions
+)
 
 incident = data["incident"]
-if active_injection and active_injection["merchant"] == merchant:
-    affected_slice = " · ".join(
-        str(value)
-        for value in (
-            active_injection.get("provider"),
-            active_injection.get("payment_method"),
-            active_injection.get("issuing_bank"),
-        )
-        if value
-    ) or "general traffic"
-    incident = {
-        "severity": "Critical" if active_injection["target_approval_rate"] <= 0.5 else "Medium",
-        "country": active_injection["country"],
-        "title": f"Test degradation affecting {affected_slice}",
-        "root_cause": {
-            "Country": active_injection["country"],
-            "Provider": active_injection.get("provider") or "Multiple",
-            "Method": active_injection.get("payment_method") or "Multiple",
-        },
-        "diagnosis": f"A degradation was detected in {affected_slice}.",
-        "diagnosis_points": [
-            f"Affected slice: {affected_slice}.",
-            f"Target approval: {active_injection['target_approval_rate']:.0%}.",
-            "The injection configuration remains isolated from the detector.",
-        ],
-        "recommendation": "Observe the next windows and confirm that the detector identifies the degradation from transaction data.",
-        "confidence": 1.0,
-    }
-
-hero_class = "merchant-hero rappi-hero" if merchant == "Rappi" else "merchant-hero"
-
+active_incidents = (
+    len(live_incidents)
+    if live_incidents is not None
+    else (1 if incident else 0)
+)
 st.markdown(
     f"""
     <style>
@@ -469,16 +617,9 @@ st.markdown("### Approval rate — live")
 
 @st.fragment(run_every="2s")
 def render_live_chart() -> None:
-    tick = st.session_state.get("chart_live_tick", 0) + 1
-    st.session_state["chart_live_tick"] = tick
-    live_trends = deepcopy(data["trend"])
-    movement = (0.0, 0.1, -0.1, 0.2, 0.1, -0.2)
-    for offset, approvals in enumerate(live_trends.values()):
-        approvals[-1] = round(
-            max(0.0, min(100.0, approvals[-1] + movement[(tick + offset) % len(movement)])),
-            1,
-        )
+    render_approval_chart(data["trend"], countries, theme)
 
+if False:  # Kept as a Vega reference; pyarrow is blocked by the Windows policy.
     chart_rows = []
     for country, approvals in live_trends.items():
         expected = countries[country]["expected"]
