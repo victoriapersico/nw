@@ -4,16 +4,21 @@ import streamlit as st
 import os
 import requests
 
-from backend.schemas import (
-    COUNTRY_ISSUING_BANKS,
-    COUNTRY_PAYMENT_METHODS,
-    InjectionConfig,
+from backend.schemas import InjectionConfig
+from frontend.injection_scope import (
+    clear_scope_state,
+    render_scope_filter,
+    render_scope_selector,
 )
 
 API_BASE_URL = os.getenv(
       "CONTROL_TOWER_API_URL",
       "http://127.0.0.1:8000",
 )
+
+if st.session_state.pop("judge_lab_reset_pending", False):
+    clear_scope_state(key_prefix="judge_lab")
+    clear_scope_state(key_prefix="dashboard_judge")
 
 st.markdown(
     """
@@ -71,21 +76,23 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+country = st.selectbox(
+    "Country",
+    ["Mexico", "Brazil", "Colombia"],
+    key="judge_lab_country",
+)
+scope = render_scope_selector(key_prefix="judge_lab")
+
 with st.form("judge_injection_form"):
     st.markdown("### Configure incident")
     form_left, form_middle, form_right = st.columns(3)
     with form_left:
         merchant = st.selectbox("Merchant", ["Rappi", "Carrefour", "Despegar"], index=2)
-        country = st.selectbox("Country", ["Mexico", "Brazil", "Colombia"])
-        provider = st.selectbox("Provider", ["Any", "Stripe", "Adyen", "dLocal"], index=2)
     with form_middle:
-        payment_method = st.selectbox(
-            "Payment method",
-            ["Any", *sorted(COUNTRY_PAYMENT_METHODS[country])],
-        )
-        issuing_bank = st.selectbox(
-            "Issuing bank",
-            ["Any", *sorted(COUNTRY_ISSUING_BANKS[country])],
+        injection_slice = render_scope_filter(
+            country=country,
+            scope=scope,
+            key_prefix="judge_lab",
         )
         decline_code = st.selectbox(
             "Decline code",
@@ -94,52 +101,48 @@ with st.form("judge_injection_form"):
     with form_right:
         target_rate_percent = st.slider("Target approval rate", 0, 100, 30, 5)
         duration_windows = st.number_input(
-            "Duration (5-minute windows)", min_value=1, max_value=24, value=6
+            "Duration (simulated 5-minute windows)",
+            min_value=6,
+            max_value=60,
+            value=30,
         )
-        st.caption("Six windows equal 30 simulated minutes.")
+        st.caption(
+            "This controls how long the simulated degradation is active. "
+            "It does not delay detection; the API evaluates two windows immediately."
+        )
 
     submitted = st.form_submit_button(
         "Inject incident",
         type="primary",
-        use_container_width=True,
+        width="stretch",
     )
 
 if submitted:
     config = InjectionConfig(
         merchant=merchant,
         country=country,
-        provider=None if provider == "Any" else provider,
-        payment_method=None if payment_method == "Any" else payment_method,
-        issuing_bank=None if issuing_bank == "Any" else issuing_bank,
+        provider=injection_slice.provider,
+        payment_method=injection_slice.payment_method,
+        issuing_bank=injection_slice.issuing_bank,
         decline_code=None if decline_code == "Not specified" else decline_code,
         target_approval_rate=target_rate_percent / 100,
         duration_windows=int(duration_windows),
     )
 
-    selected_filters = sum(
-        value is not None
-        for value in (config.provider, config.payment_method, config.issuing_bank)
-    )
-    if selected_filters > 1:
-        st.error(
-            "This combination is too narrow for the supported demo policy. "
-            "Choose at most one provider, payment method, or issuing bank."
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/injections",
+            json={"config": config.model_dump(mode="json")},
+            timeout=30,
         )
-    else:
-        try:
-            response = requests.post(
-                f"{API_BASE_URL}/injections",
-                json={"config": config.model_dump(mode="json")},
-                timeout=30,
-            )
-            response.raise_for_status()
-            result = response.json()
+        response.raise_for_status()
+        result = response.json()
 
-            st.session_state["active_injection"] = config.model_dump(mode="json")
-            st.session_state["injection_id"] = result["injection_id"]
-            st.rerun()
-        except requests.RequestException as exc:
-            st.error(f"Could not create the test injection: {exc}")
+        st.session_state["active_injection"] = config.model_dump(mode="json")
+        st.session_state["injection_id"] = result["injection_id"]
+        st.rerun()
+    except requests.RequestException as exc:
+        st.error(f"Could not create the test injection: {exc}")
 
 active_injection = st.session_state.get("active_injection")
 if active_injection:
@@ -150,7 +153,20 @@ if active_injection:
         f"target approval {active_injection['target_approval_rate']:.0%}",
         icon="🚨",
     )
-    if reset_column.button("Reset", use_container_width=True):
+    selected_filters = [
+        value
+        for value in (
+            active_injection.get("provider"),
+            active_injection.get("payment_method"),
+            active_injection.get("issuing_bank"),
+        )
+        if value is not None
+    ]
+    st.caption(
+        "Injected slice: "
+        + (" · ".join(selected_filters) if selected_filters else "all payment traffic")
+    )
+    if reset_column.button("Reset demo", width="stretch"):
         try:
             response = requests.post(
                 f"{API_BASE_URL}/monitor/reset",
@@ -159,6 +175,7 @@ if active_injection:
             response.raise_for_status()
             del st.session_state["active_injection"]
             st.session_state.pop("injection_id", None)
+            st.session_state["judge_lab_reset_pending"] = True
             st.rerun()
         except requests.RequestException as exc:
             st.error(f"Backend reset failed: {exc}")

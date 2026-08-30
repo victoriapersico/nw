@@ -4,6 +4,7 @@
 from collections import Counter, defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from threading import RLock
+from typing import cast
 from uuid import uuid4
 
 from backend.ai.diagnosis import narrate_diagnosis
@@ -25,17 +26,22 @@ from backend.schemas import (
     InjectionConfig,
     LiveTickResponse,
     Merchant,
+    PaymentMethod,
     CountryMonitoringMetric,
     ApprovalDecision,
     ApprovalRequest,
     ApprovalRevocationRequest,
     Alert,
+    DeclineCode,
     DeclineCodePatternEntry,
+    Diagnosis,
     ExecutionRequest,
     ExecutionResult,
     Incident,
     IncidentFingerprint,
     IncidentMemoryCase,
+    IncidentMonitoringOutcome,
+    IncidentOutcome,
     MerchantMonitoringResponse,
     MerchantIncidentsResponse,
     RoutingRecommendation,
@@ -47,13 +53,18 @@ from backend.schemas import (
     SimulatedRoutingChange,
     RoutingWorkflow,
     PostIncidentReport,
+    Provider,
     SimilarIncident,
     SimulationRequest,
     TransactionBatch,
 )
 
 
-LIVE_CHART_WINDOWS = 24
+# A five-minute simulator window needs 8,640 observations to retain 30 days.
+# The frontend downsamples this data for rendering, so the API can retain a
+# useful monthly operational horizon without creating a huge SVG in the browser.
+LIVE_HISTORY_DAYS = 30
+LIVE_CHART_WINDOWS = LIVE_HISTORY_DAYS * 24 * 12
 ROLLBACK_APPROVAL_RATE = 0.80
 ROLLBACK_CONSECUTIVE_WINDOWS = 2
 APPROVAL_TTL = timedelta(minutes=30)
@@ -114,15 +125,18 @@ class LiveControlTower:
             )
 
     def inject(self, config: InjectionConfig) -> str:
-        """Apply an injection only to the simulator, then advance two
+        """Apply an injection only to the simulator, then advance six
         windows."""
 
         with self._lock:
             self._runtime.apply_injection(config)
 
             # The detector requires two consecutive anomalous time windows.
-            self._advance_locked()
-            self._advance_locked()
+            # Stop once it confirms an incident, while allowing narrower,
+            # low-volume slices up to six opportunities to cross the threshold.
+            for _ in range(6):
+                if self._advance_locked().incidents:
+                    break
 
             return f"inj-{uuid4().hex}"
 
@@ -241,6 +255,8 @@ class LiveControlTower:
                 detail=f"Human decision recorded: {status}.",
             )
             self._persist_case(incident.incident_id, decision=decision)
+            if decision.status in ("rejected", "expired"):
+                self.generate_post_incident_report(incident.incident_id)
             return decision
 
     def revoke_approval(
@@ -275,6 +291,7 @@ class LiveControlTower:
                 detail=request.reason,
             )
             self._persist_case(revoked.incident_id, decision=revoked)
+            self.generate_post_incident_report(revoked.incident_id)
             return revoked.model_copy(deep=True)
 
     def request_execution(self, request: ExecutionRequest) -> ExecutionResult:
@@ -440,6 +457,9 @@ class LiveControlTower:
                 detail=request.note,
             )
             self._persist_case_for_recommendation(completed.recommendation_id, change=completed)
+            self.generate_post_incident_report(
+                self._workflows[completed.recommendation_id].incident_id
+            )
             return completed.model_copy(deep=True)
 
     def simulated_change(self, change_id: str) -> SimulatedRoutingChange:
@@ -507,21 +527,29 @@ class LiveControlTower:
                 )
             ]
             outcome = self._case_outcome(case)
-            summary = (
-                f"{case.incident.severity.title()} incident for "
-                f"{case.incident.merchant} in {case.incident.country}: approval "
-                f"conversion was {case.incident.actual_conversion:.1%} versus "
-                f"{case.incident.expected_conversion:.1%} expected. "
-                f"Recorded outcome: {outcome}."
-            )
+            monitoring_outcome = self._monitoring_outcome(case)
+            existing = self._incident_memory_store.report(incident_id)
             report = PostIncidentReport(
-                report_id=f"report-{uuid4().hex}",
+                report_id=(
+                    existing.report_id if existing is not None else f"report-{uuid4().hex}"
+                ),
                 incident_id=incident_id,
                 generated_at=datetime.now(timezone.utc),
-                summary=summary,
+                summary=self._report_summary(
+                    case,
+                    outcome=outcome,
+                    monitoring_outcome=monitoring_outcome,
+                    similar_case_count=len(similar_cases),
+                ),
+                incident=case.incident,
+                diagnosis=case.diagnosis,
+                recommendation=case.remediation,
                 evidence=case.diagnosis.evidence,
                 decision=case.decision,
                 change=case.change,
+                outcome=outcome,
+                monitoring_outcome=monitoring_outcome,
+                recurrence_detected=bool(similar_cases),
                 audit_trail=audit_trail,
                 similar_cases=similar_cases,
             )
@@ -725,6 +753,9 @@ class LiveControlTower:
             change_id=rolled_back.change_id,
             payload={"reason": reason, "actor": actor},
         )
+        self.generate_post_incident_report(
+            self._workflows[rolled_back.recommendation_id].incident_id
+        )
         return rolled_back.model_copy(deep=True)
 
     def _approval_is_valid(self, decision: ApprovalDecision) -> bool:
@@ -745,6 +776,8 @@ class LiveControlTower:
             actor="system",
             detail="Approval status changed to expired.",
         )
+        self._persist_case(expired.incident_id, decision=expired)
+        self.generate_post_incident_report(expired.incident_id)
         return False
 
     def _ensure_workflow(self, recommendation: RoutingRecommendation) -> RoutingWorkflow:
@@ -859,7 +892,9 @@ class LiveControlTower:
                 incident=diagnosed.incident,
                 diagnosis=diagnosed.diagnosis,
                 remediation=diagnosed.remediation,
-                fingerprint=self._fingerprint(diagnosed.incident, batch),
+                fingerprint=self._fingerprint(
+                    diagnosed.incident, diagnosed.diagnosis, batch
+                ),
             )
         )
 
@@ -897,7 +932,7 @@ class LiveControlTower:
 
     @staticmethod
     def _fingerprint(
-        incident: Incident, batch: TransactionBatch
+        incident: Incident, diagnosis: Diagnosis, batch: TransactionBatch
     ) -> IncidentFingerprint:
         declined = [
             transaction
@@ -909,17 +944,49 @@ class LiveControlTower:
         scopes = Counter((item.provider, item.payment_method) for item in declined)
         if not scopes:
             return IncidentFingerprint(merchant=incident.merchant, country=incident.country)
-        provider, payment_method = min(
+        fallback_provider, fallback_payment_method = min(
             scopes, key=lambda item: (-scopes[item], item[0], item[1])
         )
+        provider = cast(
+            Provider,
+            next(
+                (
+                    item.value
+                    for item in diagnosis.evidence
+                    if item.dimension == "provider"
+                    and item.value in ("Stripe", "Adyen", "dLocal")
+                ),
+                fallback_provider,
+            ),
+        )
+        payment_method = cast(
+            PaymentMethod,
+            next(
+                (
+                    item.value
+                    for item in diagnosis.evidence
+                    if item.dimension == "payment_method"
+                    and item.value in ("CARD", "PIX", "PSE", "OXXO")
+                ),
+                fallback_payment_method,
+            ),
+        )
+        supported_decline_codes = {
+            item.value
+            for item in diagnosis.evidence
+            if item.dimension == "decline_code"
+            and item.value in ("05", "51", "54", "57", "61", "91", "96")
+        }
         codes = Counter(
             item.decline_code
             for item in declined
             if item.provider == provider and item.payment_method == payment_method
-            and item.decline_code is not None
+            and item.decline_code in supported_decline_codes
         )
         pattern = [
-            DeclineCodePatternEntry(code=code, decline_count=count)
+            DeclineCodePatternEntry(
+                code=cast(DeclineCode, code), decline_count=count
+            )
             for code, count in sorted(codes.items(), key=lambda item: (-item[1], item[0]))
         ]
         return IncidentFingerprint(
@@ -931,22 +998,111 @@ class LiveControlTower:
         )
 
     @staticmethod
-    def _case_outcome(case: IncidentMemoryCase) -> str:
+    def _case_outcome(case: IncidentMemoryCase) -> IncidentOutcome:
         if case.change is not None and case.change.status == "rolled_back":
             return "rolled_back"
         if case.change is not None and case.change.status == "completed":
             return "completed"
-        if case.decision is not None and case.decision.status == "approved":
-            return "approved"
         if case.decision is not None:
-            return "rejected"
+            return case.decision.status
         return "open"
+
+    @staticmethod
+    def _monitoring_outcome(case: IncidentMemoryCase) -> IncidentMonitoringOutcome:
+        change = case.change
+        if change is None:
+            return IncidentMonitoringOutcome()
+        observed = [
+            window
+            for window in change.monitoring
+            if window.approval_rate is not None and window.attempted_transactions > 0
+        ]
+        observed_attempts = sum(window.attempted_transactions for window in observed)
+        observed_approval_rate = (
+            sum(
+                window.approval_rate * window.attempted_transactions
+                for window in observed
+                if window.approval_rate is not None
+            )
+            / observed_attempts
+            if observed_attempts
+            else None
+        )
+        return IncidentMonitoringOutcome(
+            status=change.status,
+            expected_approval_rate=change.expected_approval_rate,
+            observed_approval_rate=observed_approval_rate,
+            observed_windows=len(change.monitoring),
+            observed_attempts=observed_attempts,
+            rollback_reason=change.rollback_reason,
+        )
+
+    @staticmethod
+    def _report_summary(
+        case: IncidentMemoryCase,
+        *,
+        outcome: IncidentOutcome,
+        monitoring_outcome: IncidentMonitoringOutcome,
+        similar_case_count: int,
+    ) -> str:
+        incident = case.incident
+        recommendation = case.remediation
+        decision = case.decision
+        recurrence = (
+            f" This exact incident fingerprint occurred {similar_case_count} time(s) before."
+            if similar_case_count
+            else " No prior exact incident fingerprint was found."
+        )
+        recommendation_text = (
+            f" Recommendation {recommendation.recommendation_id} was "
+            f"{recommendation.status}."
+            if recommendation is not None
+            else " No routing recommendation was recorded."
+        )
+        decision_text = (
+            f" Human decision by {decision.decided_by}: {decision.status}."
+            if decision is not None
+            else " No human decision was recorded."
+        )
+        if monitoring_outcome.status == "not_simulated":
+            monitoring_text = " No simulated monitoring result was recorded."
+        else:
+            expected = (
+                f"{monitoring_outcome.expected_approval_rate:.1%}"
+                if monitoring_outcome.expected_approval_rate is not None
+                else "unavailable"
+            )
+            observed = (
+                f"{monitoring_outcome.observed_approval_rate:.1%}"
+                if monitoring_outcome.observed_approval_rate is not None
+                else "unavailable"
+            )
+            monitoring_text = (
+                f" Simulated monitoring ended as {monitoring_outcome.status} after "
+                f"{monitoring_outcome.observed_windows} window(s): expected approval "
+                f"{expected}, observed {observed}."
+            )
+        return (
+            f"{incident.severity.title()} incident for {incident.merchant} in "
+            f"{incident.country}: approval conversion was "
+            f"{incident.actual_conversion:.1%} versus "
+            f"{incident.expected_conversion:.1%} expected. Estimated loss was "
+            f"{incident.estimated_loss:.2f} in the detected window and "
+            f"{incident.estimated_loss_per_hour:.2f} per hour."
+            f"{recurrence}{recommendation_text}{decision_text}{monitoring_text} "
+            f"Recorded outcome: {outcome}."
+        )
 
     def _similar_incident(self, case: IncidentMemoryCase) -> SimilarIncident:
         return SimilarIncident(
             incident_id=case.incident.incident_id,
             detected_at=case.incident.detected_at,
             severity=case.incident.severity,
+            estimated_loss=case.incident.estimated_loss,
+            estimated_loss_per_hour=case.incident.estimated_loss_per_hour,
+            recommendation=case.remediation,
+            decision=case.decision,
+            monitoring_outcome=self._monitoring_outcome(case),
             outcome=self._case_outcome(case),
         )
 

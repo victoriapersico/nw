@@ -1,0 +1,230 @@
+NEXTWAVE HACKATHON 2026
+Challenges — Master Document
+Yuno × Nauta · supported by OpenAI · Aug 28–30, 2026 · teams of 4 · 24 hours
+The four challenges
+#
+Challenge
+Host · theme
+1
+The Buyer Who Isn't Human
+Yuno · agentic payments, mandates & verification
+2
+The Control Tower
+Yuno · live payment monitoring & root-cause diagnosis
+3
+The Interface That Builds Itself
+Nauta · agents that generate their own UI at runtime
+4
+The Agent on the Line
+Nauta · voice agents that work legacy processes by phone
+Rules that apply to every challenge
+Pick one. Each team tackles exactly one of the four challenges.
+Invent freely. You may invent data, flows, APIs and databases. Frameworks and protocols are free — you may draw inspiration from existing ones or design your own — but you must be able to defend every choice.
+Trial by fire. Judges will operate your system live, with an unrehearsed input, in front of everyone. It must react correctly without the team touching anything.
+Deliverables (same for all challenges)
+Presentation (PPT/Slides)
+Demo (live or video)
+Public GitHub repo with README
+Architecture diagram (in the repo or the deck)
+Decision log: what alternatives you considered at each major decision and why you chose the one you chose
+The technical defense weighs as much as the demo.  The judges will ask you to explain the architecture and every decision. A spectacular demo the team can't explain loses to a modest demo defended with judgment.
+About the hosts
+Yuno is a payment orchestration platform: a merchant integrates once and accepts payments through many providers and methods — Yuno sees every transaction from all of them.
+Nauta is an AI-powered automation system for international logistics: AI agents read importers' and exporters' emails and documents (invoices, bills of lading, purchase orders), track containers, detect problems and execute actions — without a human having to ask.
+Shared vocabulary
+Agent: an AI system that executes work autonomously using tools — it doesn't just chat, it does
+Tool: an action the agent can execute (query data, send a message, create an alert)
+Human-in-the-loop: a point where the agent must stop and ask a human to review, approve or decide
+Merchant: a company that collects payments (Challenges 1 and 2)
+CHALLENGE 1 · YUNO
+The Buyer Who Isn't Human
+A solution that lets a merchant charge an AI agent buying on a person's behalf — with mandates, limits and verification, without fraud walking in through the new door.
+Key definitions
+Purchasing agent: an AI system that discovers, decides and buys on behalf of a person (or a company)
+Mandate: the verifiable authorization a human gives their agent: what it may buy, with what limits (amount, category, validity) and with which payment method
+Verification: how the merchant confirms the agent buying from them is acting within a valid mandate from a real human
+Revocation: the human withdraws the mandate; every later purchase must fail
+Chargeback / dispute: the cardholder denies a payment ("I never authorized this") and the bank reverses the money
+1. The problem
+More and more purchases are made by an AI agent on someone's behalf: your assistant buys your flight when the price drops, a company's agent restocks inventory, an agent compares and signs up for the best plan. Yuno's whole system — like every payment system — assumes the one pressing "pay" is a person, and that assumption is breaking down. When the buyer is an agent, the questions change:
+How does the merchant know this agent represents a real human who authorized the purchase?
+How does a person authorize their agent to spend without handing over the raw card?
+What happens when the agent makes a mistake, hallucinates a purchase, or someone impersonates it?
+Who answers for the dispute: the human, the agent, the merchant?
+Today there's no good answer: merchants either block bots (and lose the legitimate sale) or let them through as humans (and eat the fraud and the chargebacks). The mandate — the piece that would make all of this safe — doesn't yet exist in practice.
+2. Objective
+Build the complete circuit of a safe agentic purchase:
+☐ A human creates a purchase mandate for their agent: what, how much, until when, with which payment method — without handing over the raw card
+☐ The merchant verifies the mandate before accepting: legitimate agent, valid mandate, purchase within limits
+☐ The purchase runs end to end: the agent discovers, decides and pays; the human receives a record of what was bought and under which mandate
+☐ The ugly cases are handled explicitly: purchase outside the mandate, expired or live-revoked mandate, impersonated agent, later dispute
+☐ Every purchase decision leaves an auditable trail that human, merchant and auditor can read
+May include (not limited to): escalation to human approval when a purchase falls outside the mandate; category-based or recurring mandates; agent identity separate from human identity.
+Trial by fire.  The judges will operate the system live — revoke the mandate and watch the agent try to buy, or change a limit and see what happens.
+3. Expected results
+A demo showing:
+☐ A human creating a mandate and their agent completing a real end-to-end purchase (mockable) within that mandate
+☐ An attempt outside the mandate (amount exceeded, forbidden category, expired) rejected or escalated to human approval — never silently approved
+☐ Live revocation working: mandate revoked → the next attempt fails
+☐ What each party sees: the human their record, the merchant their verification, the auditor the full trail
+☐ The trial by fire passed
+Bonus points
+A complete dispute flow: the human denies a purchase and the auditable trail resolves who is right
+Mandates with rich conditions ("if it drops below $150", "up to 3 times a month") evaluated correctly
+Defense against an adversarial agent trying to buy outside its mandate through creative paths
+4. Minimal fictional case
+Merchant: VuelaYa, an online travel agency that wants to accept purchases from agents without opening the door to fraud.
+Buyer: Marta authorizes her personal agent: "buy me a flight to Córdoba if it drops below $150, valid until the end of the month".
+Key moments:
+Marta creates the mandate; the agent starts watching prices
+A flight appears at $130 → the agent buys; Marta gets her record; VuelaYa its verification
+The agent tries to buy another flight at $300 → outside the mandate → rejected or escalated
+Marta revokes the mandate; the agent tries again → it fails
+Catalog, prices, mandates, protocols and payment methods can all be invented.
+CHALLENGE 2 · YUNO
+The Control Tower
+A system that watches payments live, detects when conversion drops, diagnoses the root cause with evidence and explains it in human language — before the merchant finds out on Twitter.
+Key definitions
+Provider: external processor that handles the payment (Stripe, Adyen, dLocal, MercadoPago)
+Payment method: card, PSE, wallet, PIX, cash-in-store
+Conversion (approval rate): % of approved payments over attempted payments — the metric that moves the most money
+Issuing bank: the bank that issued the buyer's card; it can decline on its own
+Decline code: the reason the provider returns when a payment doesn't approve
+Dimensions of a transaction: merchant × provider × method × country × issuing bank × decline code — the diagnosis lives in those intersections
+Root cause: the real origin of the problem, not the symptom ("provider X declines bank Y's cards in Brazil since 14:03", not "conversion dropped")
+1. The problem
+Conversion drops silently and for a thousand different reasons: a degraded provider, an issuing bank over-declining, a method down in one country, a change nobody announced. Every lost point of conversion is money lost by the minute. Today detection is artisanal:
+A human looks at dashboards when they can
+Classic alerts fail at both ends: they either fire on everything (and get ignored) or on nothing
+By the time someone notices the drop, hours have passed
+And detecting is the easy part. The hard part is the diagnosis: is the drop a provider's, a method's, a country's, an issuing bank's, a merchant's? The answer is scattered across thousands of transactions, and today a tired human assembles it by crossing filters at 3 a.m.
+2. Objective
+Build a monitoring and diagnosis system that:
+☐ Watches a live transaction stream and detects conversion drops that matter, distinguishing them from normal noise (time of day, weekends, statistical variance)
+☐ Diagnoses the root cause by navigating the dimensions (merchant × provider × method × country × issuing bank × decline code) until it isolates where the problem is
+☐ Explains with evidence: what dropped, since when, who it affects, how much money it's costing and why the system believes that — in language an operations person understands
+☐ Prioritizes when several things happen at once, and honestly says when the evidence isn't enough
+☐ Recommends an action for the human — without executing it (this challenge diagnoses, it doesn't remediate)
+May include (not limited to): estimating the money cost of each incident; comparison against expected historical behavior; memory of past incidents to recognize repeats.
+Trial by fire.  The judges will inject live an incident the team never rehearsed (a new combination of dimensions) — the system must detect and diagnose it correctly in front of everyone.
+3. Expected results
+A demo showing:
+☐ A (mocked) payment stream running normally, and the system not firing on noise
+☐ A real drop injected live → detected in reasonable time
+☐ The correct root-cause diagnosis, with the evidence visible: what, where, since when, who is affected
+☐ The readable explanation + the estimated cost + the recommended action
+☐ A case with two simultaneous incidents correctly separated and prioritized
+☐ The trial by fire passed
+Bonus points
+A case where the system admits the evidence isn't enough, instead of inventing a diagnosis
+Recognizing a repeated incident ("this already happened on Tuesday") using memory
+An explanation consumable by two audiences: operations (detail) and an executive (one line with the money)
+4. Minimal fictional case
+Scenario: PagoTotal, an orchestrator processing payments for 3 merchants with 3 providers in Mexico, Colombia and Brazil (invented, extensible data and volumes).
+Key moments:
+Normal operation — the system watches and doesn't bother anyone
+A provider starts over-declining only in Brazil → detection + diagnosis
+At the same time, a Mexican issuing bank goes down for a single merchant → the system separates the two stories and prioritizes them
+The judges inject their own incident (trial by fire)
+Transactions, decline codes, dashboards and history can all be invented.
+CHALLENGE 3 · NAUTA
+The Interface That Builds Itself
+A system where an agent running a workflow generates and renders its own interface in real time — the UI is born from the flow's state and the agent's decisions, not from predefined screens.
+Key definitions
+The logistics domain:
+Client: importer/exporter company that uses Nauta
+Logistics operation: a shipment — groups purchase orders, containers and documents
+Booking: the reservation of space on a vessel to transport containers; confirmed by the shipping line
+Container: the physical unit tracked from origin to destination
+ETD / ETA: estimated time of departure / arrival of the shipment
+Container states: booking confirmed → in transit → arrived at port → customs → delivered
+Documents: Purchase Order (PO: the client's order to its supplier) · Booking Confirmation (the carrier confirms vessel, route, dates) · Bill of Lading (BL: the transport contract; identifies the shipment) · Invoice / Packing List (commercial invoice and cargo detail) · Arrival Notice (notice of arrival at destination port)
+The agents:
+Flow (workflow): the sequence of steps and decisions an agent executes when a trigger fires
+Trigger: the event that starts a flow (an email arrives, an ETA changes, a scheduled time)
+Run: one individual execution of a flow; the same flow runs many times
+1. The problem
+At Nauta, agents run flows that make real decisions: they review documents, detect delays, escalate problems, notify clients. But the humans supervising those agents don't necessarily understand how these systems work, and they are used to seeing the world through interfaces that:
+Were designed for scenarios someone anticipated
+Require frontend work every time a new flow is born
+Can't show the unexpected: when the agent hits a rare case, the screen doesn't exist
+The result: humans blind in front of agents that are working; slow, out-of-context decisions and approvals; and the frontend becomes the bottleneck of automation when it comes to end-user trust and adoption.
+2. Objective
+Build a system where an agent executing a flow generates and renders its own interface (UI/front) in real time:
+☐ The UI is born from the flow's state and the decisions the agent makes along the way, not from predefined screens
+☐ The UI evolves with each run: the agent executes, the interface changes
+☐ If the flow changes, the interface changes
+☐ It is bidirectional and interactive: what the human answers in the UI goes back to the agent and affects its execution
+Trial by fire.  The judges will modify the flow live (add a step, change a decision) — the interface must adapt on its own.
+3. Expected results
+A demo or prototype showing:
+☐ An agent executing a flow with visible decisions
+☐ An interface generated at runtime that reflects the state of the flow
+☐ Successive agent runs → the interface updates itself with each run
+☐ A human-in-the-loop moment resolved through a generated interface (approve, choose, correct)
+☐ The flow modified → the interface adapts with no manual work
+Bonus points
+Visual coherence: the generated UI respects a design system — it isn't a collage
+Several flows running at once, each with its own interface
+Security: what an agent-generated UI can and cannot do
+4. Minimal fictional case
+Company: "Muebles del Sur", an importer bringing furniture from Vietnam to Mexico.
+Agent: Ari — manages the company's bookings and monitors its shipments.
+Base flow:
+Trigger: an email arrives with a Booking Confirmation
+Ari extracts the data: carrier, vessel, origin/destination port, ETD/ETA, containers
+Creates the operation and monitors the voyage on every run
+If it detects a serious problem → a human decides in the same interface
+Key moments (every run changes the front):
+Run 1 — booking confirmed → the interface is born: a map with the route (Vietnam → Mexico), the booking card and its containers
+Run 2 — the vessel departs → the front changes by itself: vessel position on the map, containers in transit
+Run 3 — unexpected transshipment (the vessel makes an unplanned stop and the ETA slips 9 days) → the map redraws the route and the interface generates a human-in-the-loop decision panel: wait, look for an alternative, or notify the end client?
+The trial → add a new step to the flow (e.g. "validate the Bill of Lading against the booking before confirming") and the interface must reflect it on its own
+CHALLENGE 4 · NAUTA
+The Agent on the Line
+An agent that picks up the phone and works a legacy logistics process end to end — it calls, listens, negotiates within a mandate, and turns messy human conversation into verified commitments in the systems behind it.
+Key definitions
+Voice agent: an AI system that holds a real-time spoken conversation — it listens, speaks and survives interruptions — while executing work with tools mid-call
+Drayage (ground transport): the truck leg that moves a container from the port to the client's warehouse; today it is coordinated almost entirely by phone
+Carrier / dispatcher: the trucking company that provides the truck, and the human who answers its phone, quotes rates and assigns trucks
+Commitment: a verifiable fact extracted from a conversation ("pickup Thursday 10:00, $8,500 MXN, driver Juan") that both sides can be held to afterwards
+Mandate: the authorization a human gives the agent to negotiate and commit: price cap, time window, conditions — the same idea as Challenge 1, here governing what the agent may agree to by voice
+Escalation: the moment the agent hands a live call to a human — without hanging up and without losing what was already said
+Barge-in: the caller interrupts the agent mid-sentence; the conversation must survive it
+The logistics vocabulary from Challenge 3 (operation, booking, container, ETA) applies here too. The voice stack is free: the event is supported by OpenAI and its Realtime API is a natural fit — but any stack you can defend is valid.
+1. The problem
+Software has eaten the office, but half of logistics still happens over the phone: quoting a truck, confirming a pickup, chasing a driver, renegotiating a delivery window. Agents that read emails and documents are blind to the channel where problems actually get resolved — and those calls:
+Leave no structured record: what was agreed lives in someone's memory or a sticky note
+Depend on two humans being available at the same time — the whole process waits for a call to be answered
+Don't scale: ten shipments in trouble means ten simultaneous conversations someone has to hold
+Text automation stops at the edge of the phone network. The last mile of the legacy process is a phone call — and an agent that cannot speak, listen and commit is locked out of it.
+2. Objective
+Build a voice agent that runs the ground-transport leg of a shipment entirely by phone:
+☐ It makes outbound calls: it calls carriers, requests quotes and negotiates rate and pickup window — several negotiations, one best choice, always within a mandate defined by its human
+☐ It receives inbound calls: a driver reports a delay, a dispatcher moves a schedule — the agent understands, decides and acts in real time
+☐ Every call produces commitments, not transcripts: what was agreed, with whom and under which mandate, written to the operation's state and auditable afterwards
+☐ Conversation and system stay consistent: what the agent says on the phone always matches what the system knows — and what it hears updates the system
+☐ The ugly cases are handled explicitly: the human on the line goes off-script, contradicts themselves, refuses, or pushes something outside the mandate → the agent escalates to a human mid-call, without hanging up
+May include (not limited to): parallel negotiations compared before booking; voice verification of who is calling; detecting that the other side of the call is another agent.
+Trial by fire.  A judge takes a phone and plays the other side of the call — an unrehearsed dispatcher or driver, uncooperative and improvising. The agent must reach a correct, committed outcome live, in front of everyone.
+3. Expected results
+A demo showing:
+☐ The agent calling at least two carriers (telephony mockable, the voice conversation real), negotiating and booking the best option within its mandate
+☐ An inbound call — a driver reports a problem — understood and turned into a decision and an updated operation
+☐ A renegotiation: the situation changed and the agent calls back to move what was agreed — without ever exceeding its mandate
+☐ The auditable trail: every commitment traceable to the moment in the conversation that produced it
+☐ An escalation mid-call: a human takes over a live conversation and receives the context of everything already said
+☐ The trial by fire passed
+Bonus points
+Barge-in handled naturally: the caller interrupts and the agent adapts mid-sentence instead of talking over
+Robustness to the real world: background noise, heavy accents, Spanish and English mixed in the same call
+Defense against manipulation by voice: a caller uses urgency, sweet talk or impersonation to push the agent outside its mandate — and fails
+4. Minimal fictional case
+Company: "Textiles Pacífico", an importer with a container arriving at the port of Manzanillo that needs trucking to its warehouse in Guadalajara.
+Agent: Volta — coordinates ground transport by phone under a mandate: "book a truck for Thursday, up to $9,000 MXN".
+Key moments:
+The container is confirmed at port → Volta calls two carriers, gets quotes, negotiates and books the best one within the mandate; the human sees what was agreed and why
+The dispatcher calls the next morning: the truck broke down, pickup slips to Friday → Volta understands, evaluates and reschedules — or escalates if the mandate doesn't cover it
+A carrier calls back with a "special deal" above the price cap → outside the mandate → politely declined or escalated, never committed
+The trial → a judge takes the phone and improvises the other side; Volta must close a correct commitment live
+Phone numbers, carriers, rates and the telephony layer can all be invented — the live voice conversation and the commitments cannot.

@@ -1023,23 +1023,135 @@ multiple viewers do not control monitoring time.
 Replace browser-triggered ticks with a background worker or streaming transport when
 the system is deployed for multiple users.
 
-## DEC-035 — Demo chart uses a two-hour rolling visual cycle
+## DEC-035 — Demo chart retains a 30-day rolling operational window
 
 ### Decision
-The live dashboard retains 24 approval observations per merchant-country chart. Each
-observation is one five-minute simulated window, so the chart fills over two simulated
-hours. On the next observation after the final point, the local visual history clears
-and begins a new cycle from the left.
+The live runtime retains 8,640 approval observations per merchant-country chart.
+Each observation is one five-minute simulated window, so the retained time horizon is
+30 days. The frontend downsamples the rendered SVG to a bounded number of points while
+preserving the full time range and dates on the horizontal axis.
 
 ### Why
-The longer line makes normal variation and incident onset readable during the demo,
-while the reset makes the accelerated simulation visibly continuous without an
-ever-shrinking chart.
+The monthly horizon makes normal variation and incident onset readable in operational
+context. Downsampling keeps the page responsive even after the full range is retained.
 
 ### Tradeoff
-This is a presentation-oriented in-memory chart cycle, not durable incident history.
+This remains an in-memory history and begins filling when the local simulator starts.
+It is not durable incident history.
 
 ### Revisit
-Production should retain a persistent time series and let users choose longer time
-ranges rather than clearing displayed history.
+Production should retain a persistent time series and let users select time ranges,
+rather than relying on in-process memory.
+
+## DEC-036 — Recovery recommendations remain bounded, human-approved dry-runs
+
+### Alternatives considered
+1. Let the dashboard automatically reroute payment traffic after an incident.
+2. Show only a natural-language recommendation.
+3. Show deterministic counterfactual route simulations, followed by explicit human approval and a dry-run-only result.
+
+### Decision
+Use option 3 for POST-01. The dashboard may request a remediation simulation only
+for an active merchant-scoped incident. It presents eligible and blocked target
+routes, estimated recovered value, approval estimate, confidence, assumptions,
+risks and rollback condition.
+
+An operator may record an approval and run the final demo step, but the backend
+returns a `dry_run` result with `executed: false`. No provider credentials,
+provider connectors or automatic routing actions exist in this scope.
+
+### Why
+- Makes the proposed business value visible without turning a diagnosis into an
+  unreviewed payment action.
+- Keeps statistical evidence and counterfactual estimates deterministic.
+- Produces a clear, defensible demo narrative: detect, diagnose, simulate,
+  approve, validate.
+
+### Tradeoff
+The interface demonstrates the operational decision flow rather than an actual
+provider traffic shift. It must be labeled as a simulation in the demo.
+
+### Revisit
+Only after provider-approved integration contracts, routing guardrails,
+persistent audit logging, authorization, rollback controls and human operating
+procedures are defined.
+
+## DEC-037 — Demo incident reports are session-local and downloadable
+
+### Alternatives considered
+1. Add a database before showing any incident history.
+2. Show no history or export capability in the demo.
+3. Retain incident and recovery entries in the Streamlit session and provide
+   CSV and Markdown downloads.
+
+### Decision
+Use option 3 for the demo dashboard. Each `incident_id` produces one local log
+entry containing the observed cause, severity, estimated loss, deterministic
+recovery recommendation and evaluated options. Users can download the current
+log as CSV or a grouped monthly Markdown report.
+
+### Why
+- Lets judges inspect the operational trail without new infrastructure.
+- Keeps exported values tied to the same evidence and simulation shown in the UI.
+- Does not claim durable audit storage where none exists.
+
+### Tradeoff
+The log survives Streamlit reruns but not a new browser session or application
+restart. The monthly report covers only entries captured in the current session.
+
+### Revisit
+Replace it with server-side persistent storage and audited exports when the
+post-MVP database and authorization work is approved.
+
+## DEC-038 — RCA supports method-bank intersections
+
+### Alternatives considered
+1. Diagnose payment method and issuing bank independently, then abstain when both are plausible.
+2. Let the injector disclose its selected dimensions to the RCA.
+3. Add the deterministic `payment_method × issuing_bank` slice to the RCA's existing supported intersections.
+
+### Decision
+Use option 3. The RCA evaluates provider-method, provider-bank,
+method-bank and provider-method-bank slices using the same historical and live
+evidence rules. The detector still receives only transactions; injection
+configuration is never exposed to it or to RCA.
+
+### Why
+- A bank-specific outage can be concentrated in one method without being a
+  provider outage.
+- It lets the Judge Lab demonstrate narrow, previously unseen slices honestly.
+- It preserves abstention when the combined slice lacks sufficient evidence.
+
+### Tradeoff
+More supported intersections increase the number of candidates the RCA must
+evaluate, though the MVP has only a small fixed dimension vocabulary.
+
+### Revisit
+Add further intersections only when the evaluation harness demonstrates clear
+coverage need and sufficient historical volume.
+
+## DEC-039 — Preserve a dominant single cause when its symptoms span other slices
+
+### Alternatives considered
+1. Abstain whenever provider, method and bank symptoms cannot form one sufficiently supported intersection.
+2. Always choose the highest-loss candidate, even when alternatives are similarly plausible.
+3. Confirm one single-dimension cause only when it explains at least 90% of the loss, exceeds the next single-dimension hypothesis by at least 20%, and has no incompatible competing candidate.
+
+### Decision
+Use option 3. A strongly supported bank-only, provider-only or method-only cause may
+be confirmed even though its downstream provider/method/bank slices also degrade.
+All other cases keep the existing intersection-first selection and abstention rules.
+
+### Why
+An outage isolated to one issuing bank naturally appears as degraded CARD and provider
+sub-slices. Treating these correlated symptoms as independent competing causes made
+the live Mexico bank injection abstain despite strong evidence for the bank.
+
+### Tradeoff
+The 90% and 20% thresholds are deterministic heuristics. They must be tested against
+new synthetic scenarios to avoid turning truly ambiguous incidents into false certainty.
+
+### Revisit
+Recalibrate or replace these thresholds when a larger labeled incident dataset is
+available, or if evaluation false-positive/abstention metrics regress.
 
