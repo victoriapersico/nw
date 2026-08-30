@@ -27,7 +27,7 @@ from frontend.injection_scope import (
 from frontend.incident_assistant_ui import render_incident_assistant
 from frontend.remediation_ui import render_remediation_panel
 
-load_dotenv(override=True)
+load_dotenv()
 
 API_BASE_URL = os.getenv(
     "CONTROL_TOWER_API_URL",
