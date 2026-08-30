@@ -244,6 +244,32 @@ class LiveTickResponse(BaseModel):
     window_end: datetime
     incidents: list[DiagnosedIncident] = Field(default_factory=list)
 
+
+class CountryMonitoringMetric(BaseModel):
+    """Observed and expected approval metrics for one live merchant-country window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    country: Country
+    actual_approval_rate: float = Field(ge=0, le=1)
+    expected_approval_rate: float = Field(ge=0, le=1)
+    attempted_transactions: int = Field(ge=0)
+    approval_history: list[float] = Field(default_factory=list)
+
+
+class MerchantMonitoringResponse(BaseModel):
+    """Live simulator metrics isolated to one merchant context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    merchant: Merchant
+    window_start: datetime
+    window_end: datetime
+    actual_approval_rate: float = Field(ge=0, le=1)
+    expected_approval_rate: float = Field(ge=0, le=1)
+    attempted_transactions: int = Field(ge=0)
+    countries: list[CountryMonitoringMetric] = Field(default_factory=list)
+
 class HealthResponse(BaseModel):
     status: Literal["ok"]
 

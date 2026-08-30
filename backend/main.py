@@ -1,5 +1,6 @@
 """FastAPI entry point. Run with: uvicorn backend.main:app --reload"""
 
+from contextlib import asynccontextmanager
 from functools import lru_cache
 
 from fastapi import FastAPI, HTTPException
@@ -14,16 +15,26 @@ from backend.schemas import (
     HealthResponse,
     LiveTickResponse,
     Merchant,
+    MerchantMonitoringResponse,
     MerchantIncidentsResponse,
     TransactionBatch,
 )
 from backend.tools import RecordNotFoundError
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Load local history before the UI starts polling."""
+
+    get_control_tower()
+    yield
+
+
 app = FastAPI(
     title="NextWave Payment Control Tower API",
     description="Live payment monitoring, incident diagnosis, and recommendations.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 
@@ -102,6 +113,19 @@ def merchant_incidents(merchant: Merchant) -> MerchantIncidentsResponse:
 
     try:
         return get_control_tower().incidents_for(merchant)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get(
+    "/merchants/{merchant}/monitoring",
+    response_model=MerchantMonitoringResponse,
+)
+def merchant_monitoring(merchant: Merchant) -> MerchantMonitoringResponse:
+    """Return actual approval metrics from the latest simulated live window."""
+
+    try:
+        return get_control_tower().monitoring_for(merchant)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
