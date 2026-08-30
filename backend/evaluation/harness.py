@@ -6,10 +6,26 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Literal, Protocol, Sequence
 
 from backend.evaluation.scenarios import CauseExpectation, ScenarioDefinition
 from backend.schemas import DetectionRequest, DetectionResponse, Diagnosis, Incident, InjectionConfig, TransactionBatch
+
+
+DetectionStatus = Literal[
+    "DETECTED",
+    "MISSED",
+    "NO_ALERT",
+    "FALSE_POSITIVE",
+    "SKIPPED",
+]
+EvaluationDiagnosisStatus = Literal[
+    "CONFIRMED",
+    "ABSTAINED",
+    "MISDIAGNOSED",
+    "NOT_APPLICABLE",
+    "SKIPPED",
+]
 
 
 class EvaluationRuntime(Protocol):
@@ -44,6 +60,8 @@ class ScenarioResult:
     name: str
     passed: bool
     skipped: bool
+    detection_status: DetectionStatus
+    diagnosis_status: EvaluationDiagnosisStatus
     mismatches: tuple[str, ...]
     incident_count: int
     first_detection_latency_minutes: int | None
@@ -55,6 +73,8 @@ class ScenarioResult:
             "name": self.name,
             "passed": self.passed,
             "skipped": self.skipped,
+            "detection_status": self.detection_status,
+            "diagnosis_status": self.diagnosis_status,
             "mismatches": list(self.mismatches),
             "incident_count": self.incident_count,
             "first_detection_latency_minutes": self.first_detection_latency_minutes,
@@ -99,7 +119,7 @@ class EvaluationReport:
             f"- Passed scenarios: {metrics['passed_scenarios']}",
             f"- Detection recall: {_format_metric(metrics['detection_recall'])}",
             f"- False-positive rate: {_format_metric(metrics['false_positive_rate'])}",
-            f"- Root-cause accuracy: {_format_metric(metrics['root_cause_accuracy'])}",
+            f"- Confirmed root-cause accuracy: {_format_metric(metrics['confirmed_root_cause_accuracy'])}",
             f"- Multi-incident separation accuracy: {_format_metric(metrics['multi_incident_separation_accuracy'])}",
             f"- Abstention accuracy: {_format_metric(metrics['abstention_accuracy'])}",
             f"- Mean detection latency: {_format_metric(metrics['mean_detection_latency_minutes'])} minutes",
@@ -107,8 +127,8 @@ class EvaluationReport:
             "",
             "## Scenario results",
             "",
-            "| # | Scenario | Result | Incidents | Latency | Notes |",
-            "|---:|---|---|---:|---:|---|",
+            "| # | Scenario | Result | Detection | Diagnosis | Incidents | Latency | Notes |",
+            "|---:|---|---|---|---|---:|---:|---|",
         ]
         for result in self.results:
             status = "SKIPPED" if result.skipped else "PASS" if result.passed else "FAIL"
@@ -116,6 +136,7 @@ class EvaluationReport:
             latency = result.first_detection_latency_minutes or 0
             lines.append(
                 f"| {result.scenario_id} | {result.name} | {status} | "
+                f"{result.detection_status} | {result.diagnosis_status} | "
                 f"{result.incident_count} | {latency} | {notes} |"
             )
         return "\n".join(lines) + "\n"
@@ -167,6 +188,11 @@ class EvaluationHarness:
 
         ordered_observations = tuple(observations.values())
         mismatches, skipped = _evaluate_expectation(scenario, ordered_observations)
+        detection_status, diagnosis_status = _classify_result(
+            scenario,
+            ordered_observations,
+            skipped=skipped,
+        )
         latency = (
             min(item.first_detected_window + 1 for item in ordered_observations)
             * self.window_minutes
@@ -178,6 +204,8 @@ class EvaluationHarness:
             name=scenario.name,
             passed=not mismatches,
             skipped=skipped,
+            detection_status=detection_status,
+            diagnosis_status=diagnosis_status,
             mismatches=tuple(mismatches),
             incident_count=len(ordered_observations),
             first_detection_latency_minutes=latency,
@@ -217,44 +245,103 @@ def _evaluate_expectation(
             mismatches.append("expected diagnosis_status=insufficient_evidence")
         return mismatches, False
 
-    observed_causes = {
-        (evidence.dimension, evidence.value)
-        for diagnosis in diagnoses
-        for evidence in diagnosis.evidence
-    }
     for cause in expectation.causes:
-        if not _matches_cause(cause, observed_causes):
-            mismatches.append(f"missing expected cause {cause.dimension}={cause.value}")
+        if not any(
+            _confirmed_diagnosis_matches_cause(cause, diagnosis)
+            for diagnosis in diagnoses
+        ):
+            mismatches.append(
+                f"missing confirmed expected cause {cause.dimension}={cause.value}"
+            )
 
     if expectation.primary_cause is not None and observations:
         primary = expectation.primary_cause
         highest_severity = max(
             observations, key=lambda item: _severity_rank(item.incident.severity)
         )
-        primary_evidence = (
-            {
-                (evidence.dimension, evidence.value)
-                for evidence in highest_severity.diagnosis.evidence
-            }
-            if highest_severity.diagnosis
-            else set()
-        )
-        if not _matches_cause(primary, primary_evidence):
+        if (
+            highest_severity.diagnosis is None
+            or not _confirmed_diagnosis_matches_cause(
+                primary,
+                highest_severity.diagnosis,
+            )
+        ):
             mismatches.append(
-                f"highest-priority incident did not contain {primary.dimension}={primary.value}"
+                "highest-priority confirmed diagnosis did not contain "
+                f"{primary.dimension}={primary.value}"
             )
     return mismatches, False
 
 
-def _matches_cause(
-    expected: CauseExpectation, observed: set[tuple[str, str]]
+def _confirmed_diagnosis_matches_cause(
+    expected: CauseExpectation,
+    diagnosis: Diagnosis,
 ) -> bool:
-    if (expected.dimension, expected.value) in observed:
-        return True
+    if diagnosis.diagnosis_status != "confirmed":
+        return False
     if expected.dimension == "intersection":
-        parts = {part.strip() for part in expected.value.split("×")}
-        return parts.issubset({value for _, value in observed})
-    return False
+        return len(diagnosis.root_cause_dimensions) >= 2 and any(
+            evidence.dimension == "intersection"
+            and evidence.value == expected.value
+            for evidence in diagnosis.evidence
+        )
+    return (
+        expected.dimension in diagnosis.root_cause_dimensions
+        and any(
+            evidence.dimension == expected.dimension
+            and evidence.value == expected.value
+            for evidence in diagnosis.evidence
+        )
+    )
+
+
+def _classify_result(
+    scenario: ScenarioDefinition,
+    observations: tuple[IncidentObservation, ...],
+    *,
+    skipped: bool,
+) -> tuple[DetectionStatus, EvaluationDiagnosisStatus]:
+    if skipped:
+        return "SKIPPED", "SKIPPED"
+
+    expected_outcome = scenario.expectation.outcome
+    if expected_outcome == "no_alert":
+        return (
+            ("FALSE_POSITIVE", "NOT_APPLICABLE")
+            if observations
+            else ("NO_ALERT", "NOT_APPLICABLE")
+        )
+
+    if expected_outcome == "insufficient_evidence":
+        if not observations:
+            return "NO_ALERT", "ABSTAINED"
+        diagnoses = [item.diagnosis for item in observations if item.diagnosis]
+        if any(
+            diagnosis.diagnosis_status == "insufficient_evidence"
+            for diagnosis in diagnoses
+        ):
+            return "DETECTED", "ABSTAINED"
+        return "DETECTED", "MISDIAGNOSED"
+
+    if not observations:
+        return "MISSED", "NOT_APPLICABLE"
+
+    diagnoses = [item.diagnosis for item in observations if item.diagnosis]
+    causes_confirmed = all(
+        any(
+            _confirmed_diagnosis_matches_cause(cause, diagnosis)
+            for diagnosis in diagnoses
+        )
+        for cause in scenario.expectation.causes
+    )
+    if causes_confirmed:
+        return "DETECTED", "CONFIRMED"
+    if any(
+        diagnosis.diagnosis_status == "insufficient_evidence"
+        for diagnosis in diagnoses
+    ):
+        return "DETECTED", "ABSTAINED"
+    return "DETECTED", "MISDIAGNOSED"
 
 
 def _calculate_metrics(
@@ -287,14 +374,26 @@ def _calculate_metrics(
         "false_positive_rate": _ratio(
             sum(result.incident_count > 0 for _, result in negative), len(negative)
         ),
-        "root_cause_accuracy": _ratio(
-            sum(result.passed for _, result in root_cause_cases), len(root_cause_cases)
+        "confirmed_root_cause_accuracy": _ratio(
+            sum(
+                result.diagnosis_status == "CONFIRMED"
+                for _, result in root_cause_cases
+            ),
+            len(root_cause_cases),
         ),
         "multi_incident_separation_accuracy": _ratio(
-            sum(result.passed for _, result in multi_incidents), len(multi_incidents)
+            sum(
+                result.incident_count >= scenario.expectation.minimum_incidents
+                for scenario, result in multi_incidents
+            ),
+            len(multi_incidents),
         ),
         "abstention_accuracy": _ratio(
-            sum(result.passed for _, result in abstentions), len(abstentions)
+            sum(
+                result.diagnosis_status == "ABSTAINED"
+                for _, result in abstentions
+            ),
+            len(abstentions),
         ),
         "mean_detection_latency_minutes": (
             sum(latencies) / len(latencies) if latencies else None

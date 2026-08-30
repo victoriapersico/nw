@@ -52,12 +52,14 @@ python -m backend.evaluation --list
 
 ## Métricas
 
-El reporte calcula recall de detección, false-positive rate, exactitud de causa,
-separación de incidentes, exactitud de abstención y latencia media. El error de
+El reporte calcula recall de detección, false-positive rate, exactitud de causa
+raíz confirmada, separación de incidentes, exactitud de abstención y latencia media.
+Una causa cuenta sólo cuando `diagnosis_status == "confirmed"` y la dimensión
+confirmada representa el valor esperado; evidencia observada durante una abstención
+no cuenta como RCA correcto. El error de
 loss queda explícitamente como no disponible hasta que el runtime exponga la
 pérdida sintética ground-truth; no se inventa una métrica para el pitch.
 
-MVP-07 todavía no está integrado, así que el adapter devuelve
-`insufficient_evidence` para incidentes detectados en vez de inventar causas. Eso
-permite ejecutar y medir el pipeline hoy; cuando RCA esté disponible, se reemplaza
-sólo `diagnose()` para que las expectativas de causas también puedan pasar.
+El adapter ejecuta el detector, `IncidentEngine` y RCA determinista reales. Cada
+resultado queda clasificado por separado como detección y diagnóstico, incluyendo
+`DETECTED`, `MISSED`, `CONFIRMED`, `ABSTAINED` y `MISDIAGNOSED`.

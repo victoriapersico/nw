@@ -65,7 +65,8 @@ st.markdown(
         <div class="lab-copy">Inject an unseen payment degradation, then return to the Control Tower and watch the incident appear.</div>
     </div>
     <div class="isolation-note"><b>Isolation guarantee</b><br>
-    The injector modifies simulated future state only. Its configuration is never passed to the detector.</div>
+    The injector modifies simulated future state only. Its configuration is never passed to the detector.<br>
+    <b>Supported demo scope:</b> merchant + country with at most one provider, payment-method, or issuing-bank filter.</div>
     """,
     unsafe_allow_html=True,
 )
@@ -115,20 +116,30 @@ if submitted:
         duration_windows=int(duration_windows),
     )
 
-    try:
-        response = requests.post(
-            f"{API_BASE_URL}/injections",
-            json={"config": config.model_dump(mode="json")},
-            timeout=30,
+    selected_filters = sum(
+        value is not None
+        for value in (config.provider, config.payment_method, config.issuing_bank)
+    )
+    if selected_filters > 1:
+        st.error(
+            "This combination is too narrow for the supported demo policy. "
+            "Choose at most one provider, payment method, or issuing bank."
         )
-        response.raise_for_status()
-        result = response.json()
+    else:
+        try:
+            response = requests.post(
+                f"{API_BASE_URL}/injections",
+                json={"config": config.model_dump(mode="json")},
+                timeout=30,
+            )
+            response.raise_for_status()
+            result = response.json()
 
-        st.session_state["active_injection"] = config.model_dump(mode="json")
-        st.session_state["injection_id"] = result["injection_id"]
-        st.rerun()
-    except requests.RequestException as exc:
-        st.error(f"Could not create the test injection: {exc}")
+            st.session_state["active_injection"] = config.model_dump(mode="json")
+            st.session_state["injection_id"] = result["injection_id"]
+            st.rerun()
+        except requests.RequestException as exc:
+            st.error(f"Could not create the test injection: {exc}")
 
 active_injection = st.session_state.get("active_injection")
 if active_injection:
@@ -140,8 +151,17 @@ if active_injection:
         icon="🚨",
     )
     if reset_column.button("Reset", use_container_width=True):
-        del st.session_state["active_injection"]
-        st.rerun()
+        try:
+            response = requests.post(
+                f"{API_BASE_URL}/monitor/reset",
+                timeout=30,
+            )
+            response.raise_for_status()
+            del st.session_state["active_injection"]
+            st.session_state.pop("injection_id", None)
+            st.rerun()
+        except requests.RequestException as exc:
+            st.error(f"Backend reset failed: {exc}")
 else:
     st.info("No test injection is currently active.")
 
