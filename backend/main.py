@@ -21,6 +21,12 @@ from backend.schemas import (
     MerchantMonitoringResponse,
     MerchantIncidentsResponse,
     RoutingRecommendation,
+    RemediationAuditEvent,
+    SimulatedChangeRequest,
+    SimulatedChangeCompletionRequest,
+    SimulatedChangeRollbackRequest,
+    SimulatedRoutingChange,
+    RoutingWorkflow,
     SimulationRequest,
     TransactionBatch,
 )
@@ -151,6 +157,80 @@ def request_remediation_execution(request: ExecutionRequest) -> ExecutionResult:
     """Safe contract endpoint: only dry-runs are possible in POST-01."""
 
     return get_control_tower().request_execution(request)
+
+
+@app.post("/remediation/changes", response_model=SimulatedRoutingChange)
+def apply_simulated_remediation_change(
+    request: SimulatedChangeRequest,
+) -> SimulatedRoutingChange:
+    """Apply an approved route recommendation in demo state only."""
+
+    try:
+        return get_control_tower().apply_simulated_change(request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown recommendation: {exc.args[0]}") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/remediation/changes/{change_id}", response_model=SimulatedRoutingChange)
+def get_simulated_remediation_change(change_id: str) -> SimulatedRoutingChange:
+    try:
+        return get_control_tower().simulated_change(change_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown change: {exc.args[0]}") from exc
+
+
+@app.get(
+    "/remediation/workflows/{recommendation_id}",
+    response_model=RoutingWorkflow,
+)
+def get_remediation_workflow(recommendation_id: str) -> RoutingWorkflow:
+    """Show the current human-approved workflow state for one recommendation."""
+
+    try:
+        return get_control_tower().workflow(recommendation_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown recommendation: {exc.args[0]}") from exc
+
+
+@app.post(
+    "/remediation/changes/{change_id}/rollback",
+    response_model=SimulatedRoutingChange,
+)
+def rollback_simulated_remediation_change(
+    change_id: str, request: SimulatedChangeRollbackRequest
+) -> SimulatedRoutingChange:
+    try:
+        return get_control_tower().rollback_simulated_change(change_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown change: {exc.args[0]}") from exc
+
+
+@app.post(
+    "/remediation/changes/{change_id}/complete",
+    response_model=SimulatedRoutingChange,
+)
+def complete_simulated_remediation_change(
+    change_id: str, request: SimulatedChangeCompletionRequest
+) -> SimulatedRoutingChange:
+    """Close a healthy simulated rollout after a human review."""
+
+    try:
+        return get_control_tower().complete_simulated_change(change_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown change: {exc.args[0]}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/remediation/audit", response_model=list[RemediationAuditEvent])
+def remediation_audit(recommendation_id: str | None = None) -> list[RemediationAuditEvent]:
+    """Expose the local audit trail for the human-approved demo workflow."""
+
+    return get_control_tower().remediation_audit(recommendation_id)
 
 
 @app.get(

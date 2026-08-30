@@ -329,6 +329,108 @@ class ExecutionResult(BaseModel):
     reason: str = Field(min_length=1, max_length=1_000)
 
 
+class SimulatedChangeRequest(BaseModel):
+    """Activate an approved recommendation in the local simulator only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recommendation_id: str = Field(min_length=1, max_length=128)
+    approval_decision_id: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    rollback_reference: str = Field(min_length=1, max_length=128)
+
+
+class RemediationMonitoringWindow(BaseModel):
+    """Observed health of the proposed target route in one simulator window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    window_start: datetime
+    window_end: datetime
+    attempted_transactions: int = Field(ge=0)
+    approval_rate: float | None = Field(default=None, ge=0, le=1)
+    below_rollback_threshold: bool = False
+
+
+class SimulatedRoutingChange(BaseModel):
+    """An auditable, non-provider-routing representation of an approved change."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    change_id: str = Field(min_length=1, max_length=128)
+    recommendation_id: str = Field(min_length=1, max_length=128)
+    approval_decision_id: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    merchant: Merchant
+    country: Country
+    target_provider: Provider
+    traffic_shift_pct: float = Field(gt=0, le=1)
+    status: Literal["simulated_active", "rolled_back", "completed"]
+    applied_at: datetime
+    rollback_reference: str = Field(min_length=1, max_length=128)
+    rollback_reason: str | None = Field(default=None, max_length=1_000)
+    monitoring: list[RemediationMonitoringWindow] = Field(default_factory=list)
+    simulated: Literal[True] = True
+
+
+class SimulatedChangeRollbackRequest(BaseModel):
+    """Human-initiated rollback for a simulated routing change."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decided_by: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=1_000)
+
+
+class SimulatedChangeCompletionRequest(BaseModel):
+    """Human closes a healthy simulated rollout without any provider action."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decided_by: str = Field(min_length=1, max_length=128)
+    note: str = Field(min_length=1, max_length=1_000)
+
+
+class RoutingWorkflow(BaseModel):
+    """Single source of truth for the human-approved remediation lifecycle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recommendation_id: str = Field(min_length=1, max_length=128)
+    incident_id: str = Field(min_length=1, max_length=128)
+    status: Literal[
+        "pending_approval",
+        "approved",
+        "rejected",
+        "simulated_active",
+        "rolled_back",
+        "completed",
+    ]
+    change_id: str | None = Field(default=None, max_length=128)
+    updated_at: datetime
+    transition_reason: str = Field(min_length=1, max_length=1_000)
+
+
+class RemediationAuditEvent(BaseModel):
+    """Append-only in-memory audit entry for the safe demo workflow."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str = Field(min_length=1, max_length=128)
+    occurred_at: datetime
+    event_type: Literal[
+        "approval_recorded",
+        "simulated_change_applied",
+        "target_route_monitored",
+        "simulated_change_rolled_back",
+        "simulated_change_completed",
+    ]
+    recommendation_id: str = Field(min_length=1, max_length=128)
+    change_id: str | None = Field(default=None, max_length=128)
+    actor: str = Field(min_length=1, max_length=128)
+    detail: str = Field(min_length=1, max_length=1_000)
+
+
 # Backward-compatible names used by the first POST-01 implementation.
 RemediationSimulation = SimulationResult
 RemediationProposal = RoutingRecommendation
