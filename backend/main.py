@@ -3,7 +3,7 @@
 from contextlib import asynccontextmanager
 from functools import lru_cache
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
 from backend.agent import AgentError, analyze as run_analysis
 from backend.live_control_tower import LiveControlTower, build_live_control_tower
@@ -39,6 +39,15 @@ from backend.schemas import (
     TransactionBatch,
 )
 from backend.tools import RecordNotFoundError
+from backend.yuno_sandbox import (
+    YunoApiEvent,
+    YunoApiHealth,
+    YunoEmailMessage,
+    YunoSandbox,
+    YunoSandboxError,
+    YunoSystemAlert,
+    YunoWebhookReceipt,
+)
 
 
 @asynccontextmanager
@@ -56,6 +65,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+yuno_sandbox = YunoSandbox()
+
 
 @lru_cache(maxsize=1)
 def get_control_tower() -> LiveControlTower:
@@ -67,6 +78,90 @@ def get_control_tower() -> LiveControlTower:
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+@app.post(
+    "/v1/sandbox/yuno-webhooks",
+    response_model=YunoWebhookReceipt,
+)
+async def receive_yuno_sandbox_webhook(request: Request) -> YunoWebhookReceipt:
+    """Receive a signed local Yuno fixture; never a production integration."""
+
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="webhook payload must be an object")
+    try:
+        return yuno_sandbox.ingest_webhook(
+            payload,
+            request.headers.get("x-hmac-signature"),
+        )
+    except YunoSandboxError as exc:
+        if not exc.trusted:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post(
+    "/v1/sandbox/yuno-api-demo-events/{scenario}",
+    response_model=YunoWebhookReceipt,
+)
+def record_yuno_sandbox_demo_event(scenario: str) -> YunoWebhookReceipt:
+    """Create one visible, deterministic API Manager sandbox outcome."""
+
+    try:
+        return yuno_sandbox.record_demo_scenario(scenario)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown Yuno sandbox scenario") from exc
+
+
+@app.get(
+    "/v1/sandbox/yuno-system-alerts/{account_id}",
+    response_model=list[YunoSystemAlert],
+)
+def yuno_system_alerts(account_id: str) -> list[YunoSystemAlert]:
+    """Inspect safe, local integration-operation alerts."""
+
+    return yuno_sandbox.alerts(account_id)
+
+
+@app.get(
+    "/v1/sandbox/yuno-email-outbox",
+    response_model=list[YunoEmailMessage],
+)
+def yuno_email_outbox() -> list[YunoEmailMessage]:
+    """Inspect rendered sandbox notification emails; no email is sent."""
+
+    return yuno_sandbox.emails()
+
+
+@app.get(
+    "/v1/sandbox/yuno-api-health",
+    response_model=YunoApiHealth,
+)
+def yuno_api_health() -> YunoApiHealth:
+    """Return API Manager health computed from redacted sandbox telemetry."""
+
+    return yuno_sandbox.health()
+
+
+@app.post(
+    "/v1/sandbox/yuno-api-demo-seed",
+    response_model=YunoApiHealth,
+)
+def seed_yuno_api_baseline() -> YunoApiHealth:
+    """Seed a deterministic healthy API Manager baseline."""
+
+    return yuno_sandbox.seed_healthy_baseline()
+
+
+@app.get(
+    "/v1/sandbox/yuno-api-log",
+    response_model=list[YunoApiEvent],
+)
+def yuno_api_log() -> list[YunoApiEvent]:
+    """Return newest-first, redacted Yuno sandbox activity."""
+
+    return yuno_sandbox.events()
 
 
 @app.post("/injections", response_model=CreateInjectionResponse)

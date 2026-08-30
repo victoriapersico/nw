@@ -5,6 +5,7 @@ the virtual environment. Telegram remains opt-in through the local .env file.
 Examples:
   .\start_demo.ps1
   .\start_demo.ps1 -ApiPort 8003 -DashboardPort 8503
+  .\start_demo.ps1 -ApiPort 8004 -DashboardPort 8504 -YunoDashboardPort 8505
   powershell -ExecutionPolicy Bypass -File .\start_demo.ps1
 #>
 
@@ -16,6 +17,9 @@ param(
     [ValidateRange(1, 65535)]
     [int]$DashboardPort = 8501,
 
+    [ValidateRange(1, 65535)]
+    [int]$YunoDashboardPort = 8502,
+
     [switch]$NoBrowser
 )
 
@@ -24,10 +28,15 @@ $ProjectRoot = $PSScriptRoot
 $PythonExe = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $ApiUrl = "http://127.0.0.1:$ApiPort"
 $DashboardUrl = "http://127.0.0.1:$DashboardPort"
+$YunoDashboardUrl = "http://127.0.0.1:$YunoDashboardPort"
 $LogDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "nextwave-control-tower"
 
 if (-not (Test-Path -LiteralPath $PythonExe)) {
     throw "Virtual environment not found at $PythonExe. Create it first with: python -m venv .venv"
+}
+
+if ($DashboardPort -eq $YunoDashboardPort) {
+    throw "DashboardPort and YunoDashboardPort must be different."
 }
 
 New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
@@ -98,9 +107,26 @@ else {
     Write-Host "Starting Streamlit on $DashboardUrl ..."
 }
 
+if (Test-LocalPortListening -Port $YunoDashboardPort) {
+    Write-Host "Yuno API Manager port $YunoDashboardPort is already listening; reusing the existing process."
+}
+else {
+    $yunoLog = Join-Path $LogDirectory "yuno-dashboard-$YunoDashboardPort.log"
+    $yunoErrorLog = Join-Path $LogDirectory "yuno-dashboard-$YunoDashboardPort.error.log"
+    Start-Process `
+        -FilePath $PythonExe `
+        -ArgumentList @("-m", "streamlit", "run", "frontend/yuno_demo.py", "--server.address", "127.0.0.1", "--server.port", "$YunoDashboardPort", "--server.headless", "true") `
+        -WorkingDirectory $ProjectRoot `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $yunoLog `
+        -RedirectStandardError $yunoErrorLog
+    Write-Host "Starting Yuno API Manager on $YunoDashboardUrl ..."
+}
+
 Write-Host ""
 Write-Host "NextWave is ready:"
 Write-Host "  Dashboard: $DashboardUrl"
+Write-Host "  Yuno API Manager: $YunoDashboardUrl"
 Write-Host "  API docs:  $ApiUrl/docs"
 Write-Host "  Logs:      $LogDirectory"
 Write-Host ""
