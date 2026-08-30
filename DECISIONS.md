@@ -1,5 +1,3 @@
-# DECISIONS.md
-
 # NextWave Hackathon 2026 — Technical Decision Log
 ## Challenge 2: The Control Tower
 
@@ -816,7 +814,7 @@ MVP-06 will combine severity with estimated loss, confidence, and persistence to
 
 ---
 
-## DEC-029 — MVP-06 prioritizes without changing the Incident contract
+## DEC-031 — MVP-06 prioritizes without changing the Incident contract
 
 ### Decision
 Do not add `priority`, `confidence`, or relationship fields to the frozen `Incident` contract for the first MVP-06 implementation.
@@ -842,7 +840,7 @@ If the dashboard, evaluation harness, or RCA needs an explicit confidence field 
 
 ---
 
-## DEC-030 — MVP-06 deduplicates only exact incident identities
+## DEC-032 — MVP-06 deduplicates only exact incident identities
 
 ### Decision
 Do not deduplicate incidents merely because they share `merchant` and `country`.
@@ -859,7 +857,7 @@ When detector incidents include a stable affected-slice identity, extend the dup
 
 ---
 
-## DEC-031 — MVP-08 preserves deterministic RCA facts
+## DEC-033 — MVP-08 preserves deterministic RCA facts
 
 ### Decision
 MVP-08 receives the deterministic `Diagnosis` output produced by MVP-07 and
@@ -880,31 +878,7 @@ When the team schedules a coordinated, additive EvidencePackage contract change.
 
 ---
 
-# Adding a new decision
-
-Append decisions using:
-
-```markdown
-## DEC-XXX — Short title
-
-### Alternatives considered
-1. ...
-2. ...
-
-### Decision
-...
-
-### Why
-- ...
-
-### Tradeoff
-...
-
-### Revisit
-...
-```
-
-## DEC-024 — Merchant-specific visual identity
+## DEC-034 — Merchant-specific visual identity
 
 ### Alternatives considered
 1. Use the same visual identity for every merchant.
@@ -936,7 +910,7 @@ The customization is visual only. It is not yet a complete white-label system an
 Review the palettes and add official logos only after the end-to-end MVP flow is complete.
 
 
-## DEC-026 — Separate customer and judge experiences
+## DEC-035 — Separate customer and judge experiences
 
 ### Alternatives considered
 1. Display the incident injector inside the customer dashboard.
@@ -965,7 +939,7 @@ Consider separate routes, authentication and role-based access only after the en
 
 Do not silently change a shared architectural decision in one branch.
 
-## DEC-027 — Use a Stripe-inspired operations dashboard layout
+## DEC-036 — Use a Stripe-inspired operations dashboard layout
 
 ### Decision
 Use the classic Stripe dashboard information hierarchy as the visual reference for
@@ -982,7 +956,7 @@ Merchant colors remain accents, while incident red is reserved for operational a
 The Streamlit implementation approximates the reference layout and does not reproduce
 Stripe's proprietary components or interactions exactly.
 
-## DEC-028 — Do not fabricate live monitoring values in the dashboard
+## DEC-037 — Do not fabricate live monitoring values in the dashboard
 
 ### Decision
 Keep the compact Streamlit fragment for visual refresh, but render only approval values
@@ -1002,7 +976,7 @@ flow is stable.
 
 Update this file whenever the team makes a meaningful change that could come up in technical defense.
 
-## DEC-034 — Demo dashboard polls real simulator windows
+## DEC-038 — Demo dashboard polls real simulator windows
 
 ### Decision
 The Control Tower dashboard advances the local simulator through `POST /monitor/tick`
@@ -1023,7 +997,7 @@ multiple viewers do not control monitoring time.
 Replace browser-triggered ticks with a background worker or streaming transport when
 the system is deployed for multiple users.
 
-## DEC-035 — Demo chart retains a 30-day rolling operational window
+## DEC-039 — Demo chart retains a 30-day rolling operational window
 
 ### Decision
 The live runtime retains 8,640 approval observations per merchant-country chart.
@@ -1043,7 +1017,7 @@ It is not durable incident history.
 Production should retain a persistent time series and let users select time ranges,
 rather than relying on in-process memory.
 
-## DEC-036 — Recovery recommendations remain bounded, human-approved dry-runs
+## DEC-040 — Recovery recommendations remain bounded, human-approved dry-runs
 
 ### Alternatives considered
 1. Let the dashboard automatically reroute payment traffic after an incident.
@@ -1076,7 +1050,7 @@ Only after provider-approved integration contracts, routing guardrails,
 persistent audit logging, authorization, rollback controls and human operating
 procedures are defined.
 
-## DEC-037 — Demo incident reports are session-local and downloadable
+## DEC-041 — Demo incident reports are session-local and downloadable
 
 ### Alternatives considered
 1. Add a database before showing any incident history.
@@ -1103,7 +1077,7 @@ restart. The monthly report covers only entries captured in the current session.
 Replace it with server-side persistent storage and audited exports when the
 post-MVP database and authorization work is approved.
 
-## DEC-038 — RCA supports method-bank intersections
+## DEC-042 — RCA supports method-bank intersections
 
 ### Alternatives considered
 1. Diagnose payment method and issuing bank independently, then abstain when both are plausible.
@@ -1130,7 +1104,7 @@ evaluate, though the MVP has only a small fixed dimension vocabulary.
 Add further intersections only when the evaluation harness demonstrates clear
 coverage need and sufficient historical volume.
 
-## DEC-039 — Preserve a dominant single cause when its symptoms span other slices
+## DEC-043 — Preserve a dominant single cause when its symptoms span other slices
 
 ### Alternatives considered
 1. Abstain whenever provider, method and bank symptoms cannot form one sufficiently supported intersection.
@@ -1154,4 +1128,3 @@ new synthetic scenarios to avoid turning truly ambiguous incidents into false ce
 ### Revisit
 Recalibrate or replace these thresholds when a larger labeled incident dataset is
 available, or if evaluation false-positive/abstention metrics regress.
-
