@@ -23,7 +23,6 @@ from frontend.injection_scope import (
     render_scope_filter,
     render_scope_selector,
 )
-from frontend.incident_assistant_ui import render_incident_assistant
 from frontend.remediation_ui import render_remediation_panel
 
 API_BASE_URL = os.getenv(
@@ -1554,12 +1553,6 @@ else:
                 routing,
                 incident["recommendation"],
             )
-    render_incident_assistant(
-        API_BASE_URL,
-        merchant,
-        incident["incident_id"],
-    )
-
 render_incident_recovery_log(recovery_log)
 
 st.caption("Control Tower MVP — Simulated data for validating the demo flow")
