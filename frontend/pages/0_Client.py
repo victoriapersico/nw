@@ -17,17 +17,8 @@ from frontend.injection_scope import (
     render_scope_filter,
     render_scope_selector,
 )
-from frontend.remediation_client import (
-    RemediationClientError,
-    apply_simulated_change,
-    complete_simulated_change,
-    fetch_audit,
-    fetch_simulated_change,
-    fetch_workflow,
-    record_decision,
-    revoke_approval,
-    rollback_simulated_change,
-)
+from frontend.incident_assistant_ui import render_incident_assistant
+from frontend.remediation_ui import render_remediation_panel
 
 API_BASE_URL = os.getenv(
     "CONTROL_TOWER_API_URL",
@@ -90,29 +81,6 @@ def advance_and_fetch_monitoring(merchant: str) -> dict[str, Any] | None:
         return response.json()
     except requests.RequestException as exc:
         st.session_state["live_api_error"] = str(exc)
-        return None
-
-
-def request_remediation_simulation(
-    merchant: str, incident_id: str
-) -> dict[str, Any] | None:
-    """Ask the backend for bounded routing alternatives, never a live change."""
-
-    try:
-        response = requests.post(
-            f"{API_BASE_URL}/remediation/simulations",
-            json={
-                "merchant": merchant,
-                "incident_id": incident_id,
-                "dry_run": True,
-                "idempotency_key": f"dashboard-sim-{incident_id}"[:128],
-            },
-            timeout=5,
-        )
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as exc:
-        st.error(f"Could not simulate recovery options: {exc}")
         return None
 
 
@@ -269,328 +237,6 @@ def render_incident_recovery_log(entries: list[dict[str, Any]]) -> None:
                 st.markdown("**Evaluated options:**")
                 for option in entry["options"]:
                     st.markdown(f"- {option}")
-
-
-def render_remediation_panel(
-    merchant: str,
-    incident_id: str,
-    remediation: dict[str, Any] | None,
-) -> None:
-    """Present POST-01 as a human-approved dry-run, not provider automation."""
-
-    state_key = f"remediation:{incident_id}"
-    if remediation is not None:
-        st.session_state[state_key] = remediation
-    proposal = st.session_state.get(state_key)
-
-    st.markdown("#### Recommended recovery")
-    st.caption(
-        "Counterfactual estimate based on observed transaction evidence. "
-        "It does not contact a payment provider or change routing."
-    )
-
-    if st.button(
-        "Simulate recovery options" if proposal is None else "Refresh simulation",
-        key=f"simulate:{incident_id}",
-        width="stretch",
-    ):
-        result = request_remediation_simulation(merchant, incident_id)
-        if result is not None:
-            st.session_state[state_key] = result
-            proposal = result
-            st.rerun()
-
-    if proposal is None:
-        return
-
-    if proposal["status"] != "recommended":
-        st.warning("A routing recommendation is not available for this incident yet.")
-        st.caption(proposal["rationale"])
-        return
-
-    recommended_id = proposal.get("recommended_option_id")
-    recommended = next(
-        (
-            item
-            for item in proposal.get("alternatives", [])
-            if item["option"]["option_id"] == recommended_id
-        ),
-        None,
-    )
-    if recommended is not None:
-        option = recommended["option"]
-        st.success(
-            f"Recommended: shift {option['traffic_shift_pct']:.0%} of affected "
-            f"traffic to {option['target_provider']}."
-        )
-        first, second, third = st.columns(3)
-        first.metric(
-            "Estimated recovery / hour",
-            f"US$ {recommended['expected_recovered_value_per_hour']:,.0f}",
-        )
-        second.metric(
-            "Expected approval",
-            f"{recommended['expected_approval_rate']:.1%}",
-        )
-        third.metric("Confidence", f"{recommended['confidence']:.0%}")
-
-    st.markdown("#### Simulation details")
-    st.caption(
-        "Each option is a bounded counterfactual estimate. No traffic is moved "
-        "until an approved provider integration exists."
-    )
-    st.markdown("**Evaluated alternatives**")
-    for alternative in proposal.get("alternatives", []):
-        option = alternative["option"]
-        label = (
-            f"{option['target_provider']} · "
-            f"{option['traffic_shift_pct']:.0%} traffic shift"
-        )
-        if alternative["status"] == "eligible":
-            st.markdown(
-                f"- **{label}** — estimated recovery "
-                f"US$ {alternative['expected_recovered_value_per_hour']:,.0f}/hour "
-                f"({alternative['confidence']:.0%} confidence)"
-            )
-        else:
-            st.markdown(
-                f"- ~~{label}~~ — {alternative.get('rejection_reason', 'Not eligible')}"
-            )
-
-    st.caption(f"Guardrail: {proposal['rollback_condition']}")
-    st.caption("Human approval is required. This demo can only run a dry-run.")
-
-    approval_key = f"approval:{proposal['recommendation_id']}"
-    execution_key = f"execution:{proposal['recommendation_id']}"
-    approval = st.session_state.get(approval_key)
-
-    if approval is None:
-        if st.button(
-            "Approve dry-run", key=f"approve:{incident_id}", width="stretch"
-        ):
-            try:
-                response = requests.post(
-                    f"{API_BASE_URL}/remediation/approvals",
-                    json={
-                        "decision_id": f"dashboard-approval-{incident_id}"[:128],
-                        "recommendation_id": proposal["recommendation_id"],
-                        "decision": "approved",
-                        "decided_by": "merchant-operator-demo",
-                        "decided_at": datetime.now(timezone.utc).isoformat(),
-                        "note": "Dashboard demo approval for simulation only.",
-                    },
-                    timeout=5,
-                )
-                response.raise_for_status()
-                st.session_state[approval_key] = response.json()
-                st.rerun()
-            except requests.RequestException as exc:
-                st.error(f"Could not record approval: {exc}")
-        return
-
-    st.info("Human approval recorded. The next step remains a dry-run only.")
-    execution = st.session_state.get(execution_key)
-    if execution is None and st.button(
-        "Run controlled dry-run", key=f"dry-run:{incident_id}", width="stretch"
-    ):
-        try:
-            response = requests.post(
-                f"{API_BASE_URL}/remediation/executions",
-                json={
-                    "recommendation_id": proposal["recommendation_id"],
-                    "approval_decision_id": approval["decision_id"],
-                    "idempotency_key": f"dashboard-execution-{incident_id}"[:128],
-                    "rollback_reference": proposal["rollback_reference"],
-                    "dry_run": True,
-                },
-                timeout=5,
-            )
-            response.raise_for_status()
-            execution = response.json()
-            st.session_state[execution_key] = execution
-            st.rerun()
-        except requests.RequestException as exc:
-            st.error(f"Could not run the dry-run: {exc}")
-    elif execution is not None:
-        st.success(f"{execution['reason']} Executed: {execution['executed']}.")
-def _render_recommendation_audit(recommendation_id: str) -> None:
-    """Show the append-only events without exposing provider operations."""
-
-    try:
-        events = fetch_audit(API_BASE_URL, recommendation_id)
-    except RemediationClientError as exc:
-        st.caption(f"Audit unavailable: {exc}")
-        return
-    with st.expander(f"Audit log · {len(events)} events"):
-        for event in reversed(events):
-            label = event["event_type"].replace("_", " ").title()
-            st.markdown(f"**{label}** · `{event['actor']}`")
-            st.caption(event["detail"])
-
-
-def _render_routing_workflow(routing: dict[str, Any]) -> None:
-    """Render the human gate and simulated lifecycle for one recommendation."""
-
-    recommendation_id = routing["recommendation_id"]
-    try:
-        workflow = fetch_workflow(API_BASE_URL, recommendation_id)
-    except RemediationClientError as exc:
-        st.error(f"Could not load the approval workflow: {exc}")
-        _render_recommendation_audit(recommendation_id)
-        return
-
-    status = workflow["status"]
-    st.markdown(f"**Workflow status:** `{status}`")
-    st.caption(workflow["transition_reason"])
-
-    if status == "pending_approval":
-        approve_column, reject_column = st.columns(2)
-        with approve_column:
-            if st.button(
-                "Approve recommendation",
-                type="primary",
-                use_container_width=True,
-                key=f"approve-{recommendation_id}",
-            ):
-                try:
-                    record_decision(
-                        API_BASE_URL,
-                        recommendation_id,
-                        routing["merchant"],
-                        "approved",
-                    )
-                    st.rerun()
-                except RemediationClientError as exc:
-                    st.error(str(exc))
-        with reject_column:
-            if st.button(
-                "Reject",
-                use_container_width=True,
-                key=f"reject-{recommendation_id}",
-            ):
-                try:
-                    record_decision(
-                        API_BASE_URL,
-                        recommendation_id,
-                        routing["merchant"],
-                        "rejected",
-                    )
-                    st.rerun()
-                except RemediationClientError as exc:
-                    st.error(str(exc))
-    elif status == "approved":
-        approval_decision_id = workflow.get("approval_decision_id")
-        if approval_decision_id is None:
-            st.error("The approved workflow is missing its safe application references.")
-        else:
-            apply_column, revoke_column = st.columns(2)
-            with apply_column:
-                if routing.get("rollback_reference") and st.button(
-                    "Simulate application",
-                    type="primary",
-                    use_container_width=True,
-                    key=f"apply-{recommendation_id}",
-                ):
-                    try:
-                        apply_simulated_change(
-                            API_BASE_URL,
-                            recommendation_id,
-                            approval_decision_id,
-                            routing["rollback_reference"],
-                        )
-                        st.rerun()
-                    except RemediationClientError as exc:
-                        st.error(str(exc))
-            with revoke_column:
-                if st.button(
-                    "Revoke approval",
-                    use_container_width=True,
-                    key=f"revoke-{recommendation_id}",
-                ):
-                    try:
-                        revoke_approval(
-                            API_BASE_URL,
-                            approval_decision_id,
-                            routing["merchant"],
-                        )
-                        st.rerun()
-                    except RemediationClientError as exc:
-                        st.error(str(exc))
-    elif status == "rejected":
-        st.warning("The operator rejected this recommendation.")
-    elif status == "expired":
-        st.warning("The approval expired before simulation activation.")
-    elif status == "revoked":
-        st.warning("The operator revoked approval before simulation activation.")
-    elif status in {"simulated_active", "rolled_back", "completed"}:
-        change_id = workflow.get("change_id")
-        if change_id is None:
-            st.error("The workflow is missing its simulated change reference.")
-        else:
-            try:
-                change = fetch_simulated_change(API_BASE_URL, change_id)
-            except RemediationClientError as exc:
-                st.error(str(exc))
-            else:
-                latest = change["monitoring"][-1] if change["monitoring"] else None
-                before, expected, observed = st.columns(3)
-                before.metric("Before approval", f"{change['before_approval_rate']:.1%}")
-                expected.metric(
-                    "Expected after",
-                    (
-                        f"{change['expected_approval_rate']:.1%}"
-                        if change["expected_approval_rate"] is not None
-                        else "N/A"
-                    ),
-                )
-                observed.metric(
-                    "Observed target",
-                    (
-                        f"{latest['approval_rate']:.1%}"
-                        if latest and latest["approval_rate"] is not None
-                        else "Awaiting window"
-                    ),
-                )
-                st.caption(
-                    f"Expected recovery: US$ "
-                    f"{change['expected_recovered_value_per_hour']:,.0f}/h"
-                    + (
-                        f" · Observed errors: {latest['error_rate']:.1%}"
-                        if latest and latest["error_rate"] is not None
-                        else ""
-                    )
-                )
-                if status == "simulated_active":
-                    rollback_column, complete_column = st.columns(2)
-                    with rollback_column:
-                        if st.button(
-                            "Revert simulated change",
-                            use_container_width=True,
-                            key=f"rollback-{change_id}",
-                        ):
-                            try:
-                                rollback_simulated_change(API_BASE_URL, change_id)
-                                st.rerun()
-                            except RemediationClientError as exc:
-                                st.error(str(exc))
-                    with complete_column:
-                        if st.button(
-                            "Complete review",
-                            type="primary",
-                            use_container_width=True,
-                            key=f"complete-{change_id}",
-                        ):
-                            try:
-                                complete_simulated_change(API_BASE_URL, change_id)
-                                st.rerun()
-                            except RemediationClientError as exc:
-                                st.error(str(exc))
-                elif status == "rolled_back":
-                    st.warning(change["rollback_reason"] or "Simulated change reverted.")
-                else:
-                    st.success("Simulated rollout review completed. No provider was contacted.")
-
-    _render_recommendation_audit(recommendation_id)
 
 
 def render_approval_chart(
@@ -1321,6 +967,11 @@ if live_incidents is not None:
                     if selected_simulation is not None
                     else 0.0
                 ),
+                "expected_approval_rate": (
+                    selected_simulation["expected_approval_rate"]
+                    if selected_simulation is not None
+                    else None
+                ),
             }
 
         data["incident"] = {
@@ -1740,7 +1391,7 @@ if False:  # Kept as a Vega reference; pyarrow is blocked by the Windows policy.
             },
             "height": 290,
         },
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -1775,42 +1426,17 @@ else:
             st.caption(f"Evidence confidence: {incident['confidence']:.0%}")
     with simulation_column:
         with st.container(border=True):
-            st.markdown("#### Recommended action")
             routing = incident.get("routing_recommendation")
-            if routing is None:
-                st.info(incident["recommendation"], icon="💡")
-            elif (
-                routing["status"] == "recommended"
-                and routing.get("traffic_cap") is not None
-                and routing.get("target_provider")
-            ):
-                st.info(
-                    f"Shift {routing['traffic_cap']:.0%} of the affected traffic "
-                    f"to {routing['target_provider']}.",
-                    icon="💡",
-                )
-                st.caption(
-                    f"Estimated recovery: US$ "
-                    f"{routing['expected_recovery_per_hour']:,.0f}/h · "
-                    f"Confidence: {routing['confidence']:.0%}"
-                )
-                st.write(routing["rationale"])
-                st.caption(
-                    "Recommendation only · Human approval required · "
-                    "No routing change has occurred"
-                )
-                _render_routing_workflow(routing)
-            elif routing["status"] == "recommended":
-                st.warning(
-                    "The recommendation is incomplete. Refresh the simulation before approval."
-                )
-                st.caption(routing["rationale"])
-            else:
-                st.warning("No routing change recommended. Continue monitoring.")
-                st.caption(
-                    routing["abstention_reason"] or routing["rationale"]
-                )
-                _render_recommendation_audit(routing["recommendation_id"])
+            render_remediation_panel(
+                API_BASE_URL,
+                routing,
+                incident["recommendation"],
+            )
+    render_incident_assistant(
+        API_BASE_URL,
+        merchant,
+        incident["incident_id"],
+    )
 
 render_incident_recovery_log(recovery_log)
 

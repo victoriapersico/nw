@@ -52,6 +52,24 @@ def fetch_workflow(base_url: str, recommendation_id: str) -> dict[str, Any]:
     return result
 
 
+def ask_incident_assistant(
+    base_url: str,
+    incident_id: str,
+    merchant: str,
+    question: str,
+) -> dict[str, Any]:
+    """Ask about one merchant-owned incident without sending UI context or secrets."""
+
+    result = _request_json(
+        "POST",
+        base_url,
+        f"/incidents/{incident_id}/assistant",
+        payload={"merchant": merchant, "question": question},
+    )
+    assert isinstance(result, dict)
+    return result
+
+
 def record_decision(
     base_url: str,
     recommendation_id: str,
@@ -60,8 +78,9 @@ def record_decision(
     *,
     decided_by: str = "merchant-operator",
     note: str | None = None,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
-    operation_id = uuid4().hex
+    operation_id = operation_id or uuid4().hex
     result = _request_json(
         "POST",
         base_url,
@@ -107,7 +126,10 @@ def apply_simulated_change(
     recommendation_id: str,
     approval_decision_id: str,
     rollback_reference: str,
+    *,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
+    operation_id = operation_id or uuid4().hex
     result = _request_json(
         "POST",
         base_url,
@@ -115,7 +137,7 @@ def apply_simulated_change(
         payload={
             "recommendation_id": recommendation_id,
             "approval_decision_id": approval_decision_id,
-            "idempotency_key": f"change-{uuid4().hex}",
+            "idempotency_key": f"change-{operation_id}",
             "rollback_reference": rollback_reference,
         },
     )
