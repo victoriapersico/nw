@@ -2,6 +2,7 @@
 
 import os
 import requests
+import json
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,14 @@ from frontend.remediation_client import (
     record_decision,
     revoke_approval,
     rollback_simulated_change,
+)
+from frontend.notification_client import (
+    NotificationClientError,
+    acknowledge_alert,
+    fetch_alerts,
+    fetch_post_incident_report,
+    fetch_similar_cases,
+    generate_post_incident_report,
 )
 
 API_BASE_URL = os.getenv(
@@ -433,6 +442,150 @@ def _render_recommendation_audit(recommendation_id: str) -> None:
             st.caption(event["detail"])
 
 
+@st.fragment(run_every="2s")
+def render_notification_inbox() -> None:
+    """Render durable backend notifications, never a browser-only inbox."""
+
+    try:
+        alerts = fetch_alerts(API_BASE_URL, acknowledged=False)
+    except NotificationClientError as exc:
+        st.caption(f"Notifications unavailable: {exc}")
+        return
+
+    labels = {
+        "incident_detected": ("🚨", "Incident detected"),
+        "approval_required": ("🟦", "Approval required"),
+        "rollback_triggered": ("↩️", "Rollback triggered"),
+    }
+    with st.expander(f"Notifications · {len(alerts)} pending", expanded=bool(alerts)):
+        st.caption("Durable local inbox. Acknowledging an item does not change routing.")
+        if not alerts:
+            st.success("No pending notifications.")
+            return
+        for alert in alerts:
+            icon, label = labels[alert["type"]]
+            payload = alert.get("payload") or {}
+            context = " · ".join(
+                str(value)
+                for value in (
+                    payload.get("merchant"),
+                    payload.get("country"),
+                    payload.get("severity"),
+                    payload.get("reason"),
+                )
+                if value
+            )
+            left, right = st.columns((4, 1), vertical_alignment="center")
+            with left:
+                st.markdown(f"**{icon} {label}**")
+                st.caption(context or alert["created_at"])
+                st.caption(alert["created_at"])
+            with right:
+                if st.button(
+                    "Acknowledge",
+                    key=f"acknowledge-{alert['alert_id']}",
+                    use_container_width=True,
+                ):
+                    try:
+                        acknowledge_alert(API_BASE_URL, alert["alert_id"])
+                        st.rerun()
+                    except NotificationClientError as exc:
+                        st.error(str(exc))
+            st.divider()
+
+
+def render_incident_memory(incident_id: str) -> None:
+    """Expose exact-match history without describing it as AI similarity."""
+
+    try:
+        similar_cases = fetch_similar_cases(API_BASE_URL, incident_id)
+    except NotificationClientError as exc:
+        st.caption(f"Incident memory unavailable: {exc}")
+        return
+
+    with st.expander(f"Incident memory · {len(similar_cases)} exact matches"):
+        st.caption(
+            "Exact match on merchant, country, provider, payment method, and decline-code pattern."
+        )
+        if not similar_cases:
+            st.info("No prior incident has this exact deterministic fingerprint.")
+            return
+        for case in similar_cases:
+            st.markdown(
+                f"**{case['severity'].title()}** · {case['detected_at']} · "
+                f"outcome: `{case['outcome']}`"
+            )
+            st.caption(case["incident_id"])
+
+
+def render_post_incident_report(incident_id: str, workflow_status: str) -> None:
+    """Generate and display a backend-persisted, evidence-bound report."""
+
+    if workflow_status not in {"rolled_back", "completed"}:
+        return
+
+    report_key = f"post-incident-report:{incident_id}"
+    report = st.session_state.get(report_key)
+    if report is None:
+        try:
+            report = fetch_post_incident_report(API_BASE_URL, incident_id)
+        except NotificationClientError:
+            report = None
+        else:
+            st.session_state[report_key] = report
+
+    st.markdown("#### Post-incident report")
+    st.caption("Built from persisted evidence, decisions, monitoring, and audit events.")
+    if report is None:
+        if st.button(
+            "Generate post-incident report",
+            key=f"generate-report-{incident_id}",
+            use_container_width=True,
+        ):
+            try:
+                st.session_state[report_key] = generate_post_incident_report(
+                    API_BASE_URL, incident_id
+                )
+                st.rerun()
+            except NotificationClientError as exc:
+                st.error(str(exc))
+        return
+
+    st.success(report["summary"])
+    decision = report.get("decision")
+    if decision is not None:
+        st.caption(
+            f"Decision: `{decision['status']}` by {decision['decided_by']} · "
+            f"{decision['decided_at']}"
+        )
+    change = report.get("change")
+    if change is not None:
+        st.caption(
+            f"Simulated change: `{change['status']}` · "
+            f"{len(change['monitoring'])} monitoring windows"
+        )
+    with st.expander(f"Evidence · {len(report['evidence'])} items"):
+        for evidence in report["evidence"]:
+            st.markdown(
+                f"- **{evidence['dimension']}**: {evidence['value']} "
+                f"({evidence['baseline_metric']:.1%} → {evidence['live_metric']:.1%})"
+            )
+    with st.expander(f"Audit trail · {len(report['audit_trail'])} events"):
+        for event in report["audit_trail"]:
+            st.markdown(
+                f"**{event['event_type'].replace('_', ' ').title()}** · {event['actor']}"
+            )
+            st.caption(event["detail"])
+    st.download_button(
+        "Download report (JSON)",
+        data=json.dumps(report, ensure_ascii=False, indent=2),
+        file_name=f"post-incident-{incident_id}.json",
+        mime="application/json",
+        key=f"download-report-{incident_id}",
+        use_container_width=True,
+    )
+
+
 def _render_routing_workflow(routing: dict[str, Any]) -> None:
     """Render the human gate and simulated lifecycle for one recommendation."""
 
@@ -596,6 +749,7 @@ def _render_routing_workflow(routing: dict[str, Any]) -> None:
                     st.success("Simulated rollout review completed. No provider was contacted.")
 
     _render_recommendation_audit(recommendation_id)
+    render_post_incident_report(routing["incident_id"], status)
 
 
 def render_approval_chart(
@@ -1083,6 +1237,8 @@ with st.container(key="demo_toolbar"):
         )
 
 
+render_notification_inbox()
+
 live_playback = True
 
 with st.popover("Judge Lab"):
@@ -1286,6 +1442,7 @@ if live_incidents is not None:
             )
             routing_recommendation = {
                 "recommendation_id": remediation["recommendation_id"],
+                "incident_id": raw_incident["incident_id"],
                 "merchant": raw_incident["merchant"],
                 "status": remediation["status"],
                 "rationale": remediation["rationale"],
@@ -1756,6 +1913,7 @@ else:
             for point in incident["diagnosis_points"]:
                 st.markdown(f"- {point}")
             st.caption(f"Evidence confidence: {incident['confidence']:.0%}")
+            render_incident_memory(incident["incident_id"])
     with simulation_column:
         with st.container(border=True):
             st.markdown("#### Recommended action")
