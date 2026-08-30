@@ -1271,11 +1271,11 @@ def render_live_summary() -> None:
             st.session_state["monitoring_snapshot"] = snapshot
 
     if snapshot is None:
-        detail = st.session_state.get("live_api_error")
-        st.warning(
-            "Waiting for the live Control Tower API. Start FastAPI to begin monitoring."
-            + (f" Details: {detail}" if detail else "")
+        st.info(
+            "Monitoring is reconnecting.",
+            icon=":material/sync:",
         )
+        st.caption("Live metrics will appear automatically when the local service is available.")
         return
 
     active = fetch_merchant_incidents(merchant)
