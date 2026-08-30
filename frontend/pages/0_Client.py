@@ -28,10 +28,26 @@ def fetch_merchant_incidents(
     try:
         response = requests.get(
             f"{API_BASE_URL}/merchants/{merchant}/incidents",
-            timeout=10,
+            timeout=1.5,
         )
         response.raise_for_status()
         return response.json()["incidents"]
+    except requests.RequestException:
+        return None
+
+
+def advance_and_fetch_monitoring(merchant: str) -> dict[str, Any] | None:
+    """Advance one real simulator window, then read its merchant-scoped metrics."""
+
+    try:
+        tick = requests.post(f"{API_BASE_URL}/monitor/tick", timeout=5)
+        tick.raise_for_status()
+        response = requests.get(
+            f"{API_BASE_URL}/merchants/{merchant}/monitoring",
+            timeout=2,
+        )
+        response.raise_for_status()
+        return response.json()
     except requests.RequestException:
         return None
 
@@ -419,20 +435,84 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+if "live_playback" not in st.session_state:
+    st.session_state["live_playback"] = True
 
-with st.sidebar:
-    current_merchant = st.session_state.get("monitored_company", "Rappi")
-    company_logo, company_name = st.columns([1, 4], vertical_alignment="center")
-    with company_logo:
-        st.image(MERCHANT_LOGOS[current_merchant], use_container_width=True)
-    with company_name:
-        merchant = st.selectbox(
-            "Monitored company",
-            list(MERCHANT_DATA),
-            index=list(MERCHANT_DATA).index(current_merchant),
-            key="monitored_company",
-            label_visibility="collapsed",
+if "monitored_company" not in st.session_state:
+    st.session_state["monitored_company"] = "Rappi"
+current_merchant = st.session_state["monitored_company"]
+
+st.markdown(
+    """
+    <style>
+      .st-key-demo_toolbar {
+        background:linear-gradient(105deg,#17233a,#203d68 58%,#19617a) !important;
+        border:1px solid rgba(255,255,255,.17) !important;
+        border-radius:14px !important;
+        padding:10px 14px 12px !important;
+        margin:2px 0 14px !important;
+        box-shadow:0 10px 26px rgba(18,36,65,.15) !important;
+      }
+      .st-key-demo_toolbar [data-testid="stSelectbox"] label {
+        color:#b9cce7 !important; font-size:10px !important; font-weight:750 !important;
+        letter-spacing:.08em !important; text-transform:uppercase !important;
+      }
+      .st-key-demo_toolbar div[data-baseweb="select"] > div {
+        min-height:34px !important; background:rgba(255,255,255,.11) !important;
+        border:1px solid rgba(255,255,255,.23) !important; border-radius:8px !important;
+        color:#fff !important;
+      }
+      .st-key-demo_toolbar div[data-baseweb="select"] * { color:#fff !important; }
+      .st-key-demo_toolbar .stButton button {
+        min-height:36px !important; border-radius:8px !important; border:0 !important;
+        background:#fff !important; color:#183357 !important; font-weight:750 !important;
+      }
+      .toolbar-kicker { color:#a9c8e8; font-size:10px; font-weight:750; letter-spacing:.12em; text-transform:uppercase; }
+      .toolbar-title { color:#fff; font-size:16px; font-weight:760; letter-spacing:-.02em; margin-top:1px; }
+      .toolbar-copy { color:#d7e6f7; font-size:12px; line-height:17px; margin-top:2px; }
+      .toolbar-live { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:5px 9px; font-size:11px; font-weight:750; }
+      .toolbar-live.on { color:#b8f7d5; background:rgba(29,171,108,.18); border:1px solid rgba(133,239,184,.28); }
+      .toolbar-live.off { color:#ffe0aa; background:rgba(231,157,44,.16); border:1px solid rgba(255,210,130,.25); }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+with st.container(key="demo_toolbar"):
+    toolbar_logo, toolbar_brand, toolbar_merchant, toolbar_status, toolbar_action = st.columns(
+        [0.45, 1.95, 1.5, 2.5, 1.4], vertical_alignment="center"
+    )
+    with toolbar_logo:
+        st.image(MERCHANT_LOGOS[current_merchant], width=40)
+    with toolbar_brand:
+        st.markdown(
+            "<div class='toolbar-kicker'>NextWave · payment operations</div>"
+            "<div class='toolbar-title'>Control Tower</div>",
+            unsafe_allow_html=True,
         )
+    with toolbar_merchant:
+        merchant = st.selectbox(
+            "Merchant",
+            list(MERCHANT_DATA),
+            key="monitored_company",
+        )
+    with toolbar_status:
+        is_live = st.session_state["live_playback"]
+        live_class = "on" if is_live else "off"
+        live_label = "● LIVE SIMULATOR" if is_live else "Ⅱ SIMULATOR PAUSED"
+        st.markdown(
+            f"<span class='toolbar-live {live_class}'>{live_label}</span>"
+            "<div class='toolbar-copy'>One real simulated payment window every 5 seconds.</div>",
+            unsafe_allow_html=True,
+        )
+    with toolbar_action:
+        action_label = "Pause simulator" if st.session_state["live_playback"] else "Start simulator"
+        if st.button(action_label, key="demo_live_action", width="stretch"):
+            st.session_state["live_playback"] = not st.session_state["live_playback"]
+            st.rerun()
+
+
+live_playback = bool(st.session_state["live_playback"])
 
 with st.popover("Judge Lab"):
     st.markdown("#### Inject test incident")
@@ -510,7 +590,7 @@ data = deepcopy(MERCHANT_DATA[merchant])
 theme = MERCHANT_THEMES[merchant]
 hero_class = "merchant-hero rappi-hero" if merchant == "Rappi" else "merchant-hero"
 
-live_incidents = fetch_merchant_incidents(merchant)
+live_incidents = fetch_merchant_incidents(merchant) if live_playback else None
 
 # When the API is available, it is the source of truth: no synthetic UI
 
@@ -664,17 +744,23 @@ else:
     )
 
 
-@st.fragment(run_every="2s")
+@st.fragment(run_every="5s")
 def render_live_summary() -> None:
-    tick = st.session_state.get("live_demo_tick", 0) + 1
-    st.session_state["live_demo_tick"] = tick
-    approval_pattern = (0.0, 0.1, -0.1, 0.2, 0.1, -0.2)
-    live_approval = max(
-        0.0,
-        min(100.0, weighted_approval + approval_pattern[tick % len(approval_pattern)]),
-    )
-    live_transactions = total_transactions + tick * 37
-    incident_class = " incident" if active_incidents else ""
+    snapshot = st.session_state.get("monitoring_snapshot")
+    if live_playback:
+        snapshot = advance_and_fetch_monitoring(merchant)
+        if snapshot is not None:
+            st.session_state["monitoring_snapshot"] = snapshot
+
+    if snapshot is None:
+        st.warning("Waiting for the live Control Tower API. Start FastAPI to begin monitoring.")
+        return
+
+    active = fetch_merchant_incidents(merchant)
+    incident_count = len(active) if active is not None else 0
+    live_approval = snapshot["actual_approval_rate"] * 100
+    live_transactions = snapshot["attempted_transactions"]
+    incident_class = " incident" if incident_count else ""
 
     st.markdown(
         f"""
@@ -682,7 +768,7 @@ def render_live_summary() -> None:
         <section class="executive-summary">
             <div class="section-header">
                 <div class="eyebrow">Executive summary</div>
-                <span class="live-note">Updates every 2 seconds</span>
+                <span class="live-note">Real simulator · updates every 5 seconds</span>
             </div>
             <div class="kpi-row">
                 <div class="kpi-card">
@@ -696,7 +782,7 @@ def render_live_summary() -> None:
                 <a class="kpi-link" href="#incident-detail">
                     <div class="kpi-card{incident_class}">
                         <div class="kpi-label">Active incidents</div>
-                        <div class="kpi-value">{active_incidents}</div>
+                        <div class="kpi-value">{incident_count}</div>
                     </div>
                 </a>
             </div>
@@ -709,9 +795,23 @@ def render_live_summary() -> None:
 render_live_summary()
 
 
-@st.fragment(run_every="2s")
+@st.fragment(run_every="5s")
 def render_live_chart() -> None:
-    render_approval_chart(data["trend"], countries, theme)
+    snapshot = st.session_state.get("monitoring_snapshot")
+    if snapshot is None:
+        st.info("Live chart will appear after the first simulator window.")
+        return
+
+    live_trends: dict[str, list[float]] = {}
+    live_countries: dict[str, dict[str, Any]] = {}
+    for country in snapshot["countries"]:
+        country_name = country["country"]
+        history = [rate * 100 for rate in country["approval_history"]]
+        live_trends[country_name] = history or [country["actual_approval_rate"] * 100]
+        live_countries[country_name] = {
+            "expected": country["expected_approval_rate"] * 100,
+        }
+    render_approval_chart(live_trends, live_countries, theme)
 
 
 if False:  # Kept as a Vega reference; pyarrow is blocked by the Windows policy.

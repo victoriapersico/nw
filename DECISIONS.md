@@ -1002,3 +1002,44 @@ flow is stable.
 
 Update this file whenever the team makes a meaningful change that could come up in technical defense.
 
+## DEC-034 — Demo dashboard polls real simulator windows
+
+### Decision
+The Control Tower dashboard advances the local simulator through `POST /monitor/tick`
+every five seconds while Live simulator is enabled. It renders approval rate, expected
+rate, volume and chart history from `GET /merchants/{merchant}/monitoring`.
+
+### Why
+The browser must not invent changing operational values. A visible refresh now maps to
+a five-minute simulated transaction window that has passed through the same simulator,
+baseline and detector pipeline used by the MVP.
+
+### Tradeoff
+Refreshing the dashboard advances the local demo clock. This is appropriate for the
+single-user hackathon demonstration but production needs a server-owned scheduler so
+multiple viewers do not control monitoring time.
+
+### Revisit
+Replace browser-triggered ticks with a background worker or streaming transport when
+the system is deployed for multiple users.
+
+## DEC-035 — Demo chart uses a two-hour rolling visual cycle
+
+### Decision
+The live dashboard retains 24 approval observations per merchant-country chart. Each
+observation is one five-minute simulated window, so the chart fills over two simulated
+hours. On the next observation after the final point, the local visual history clears
+and begins a new cycle from the left.
+
+### Why
+The longer line makes normal variation and incident onset readable during the demo,
+while the reset makes the accelerated simulation visibly continuous without an
+ever-shrinking chart.
+
+### Tradeoff
+This is a presentation-oriented in-memory chart cycle, not durable incident history.
+
+### Revisit
+Production should retain a persistent time series and let users choose longer time
+ranges rather than clearing displayed history.
+

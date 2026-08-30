@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -99,6 +100,14 @@ class ControlTowerEvaluationRuntime:
             incident,
             tuple(self._recent_batches),
         )
+
+    def expected_approval_rate(
+        self, merchant: str, country: str, timestamp: datetime
+    ) -> float | None:
+        """Expose the fitted seasonal expectation without exposing injection state."""
+
+        metric = self._baseline.expected_for(merchant, country, timestamp)
+        return metric.approval_rate if metric is not None else None
 
     def _require_simulator(self) -> LiveTransactionSimulator:
         if self._simulator is None:
