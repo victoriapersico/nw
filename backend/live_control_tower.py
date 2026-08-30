@@ -8,6 +8,9 @@ from typing import cast
 from uuid import uuid4
 
 from backend.ai.diagnosis import narrate_diagnosis
+from backend.ai.incident_assistant import (
+    answer_incident_question as answer_question_from_incident,
+)
 from backend.evaluation.scenarios import (
     DEFAULT_LIVE_VOLUME_PER_WINDOW,
     ScenarioDefinition,
@@ -39,6 +42,8 @@ from backend.schemas import (
     ExecutionResult,
     Incident,
     IncidentFingerprint,
+    IncidentAssistantRequest,
+    IncidentAssistantResponse,
     IncidentMemoryCase,
     IncidentMonitoringOutcome,
     IncidentOutcome,
@@ -166,6 +171,26 @@ class LiveControlTower:
                 merchant=merchant,
                 incidents=[by_id[incident.incident_id] for incident in ordered],
             )
+
+    def answer_incident_question(
+        self,
+        incident_id: str,
+        request: IncidentAssistantRequest,
+    ) -> IncidentAssistantResponse:
+        """Answer from one defensive incident snapshot without mutating state."""
+
+        with self._lock:
+            item = self._incidents.get(incident_id)
+            if item is None:
+                raise KeyError(incident_id)
+            if item.incident.merchant != request.merchant:
+                raise PermissionError(
+                    "The requested merchant does not own this incident."
+                )
+            snapshot = item.model_copy(deep=True)
+
+        # Do not hold the Control Tower lock during a potentially slow model call.
+        return answer_question_from_incident(snapshot, request.question)
 
     def simulate_remediation(self, request: SimulationRequest) -> RoutingRecommendation:
         """Re-evaluate an existing incident in dry-run mode only."""

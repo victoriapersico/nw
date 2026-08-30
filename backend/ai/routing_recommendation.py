@@ -14,10 +14,10 @@ from collections.abc import Sequence
 from typing import Literal
 
 from openai import (
-    APIError,
     ContentFilterFinishReasonError,
     LengthFinishReasonError,
     OpenAI,
+    OpenAIError,
 )
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -181,18 +181,16 @@ def _openai_explanation(
                 selected,
             ),
             text_format=_RoutingExplanation,
+            store=False,
         )
-    except APIError as exc:
+    except (
+        OpenAIError,
+        ContentFilterFinishReasonError,
+        LengthFinishReasonError,
+        ValidationError,
+    ) as exc:
         raise RoutingRecommendationError(
-            f"OpenAI API request failed: {exc}"
-        ) from exc
-    except (ContentFilterFinishReasonError, LengthFinishReasonError) as exc:
-        raise RoutingRecommendationError(
-            f"OpenAI could not complete the structured recommendation: {exc}"
-        ) from exc
-    except ValidationError as exc:
-        raise RoutingRecommendationError(
-            "OpenAI returned an invalid routing recommendation."
+            "OpenAI could not return a valid routing recommendation."
         ) from exc
 
     parsed = response.output_parsed
@@ -249,11 +247,21 @@ def recommend_routing(
         )
 
     selected = _rank_eligible_options(eligible)[0]
-    explanation = (
-        _mock_explanation(selected)
-        if use_mock
-        else _openai_explanation(diagnosis, policy, simulations, selected)
-    )
+    if use_mock:
+        explanation = _mock_explanation(selected)
+    else:
+        try:
+            explanation = _openai_explanation(
+                diagnosis,
+                policy,
+                simulations,
+                selected,
+            )
+            _validate_model_wording(explanation)
+        except Exception:
+            # Selection and metrics are already deterministic. If wording fails,
+            # keep the incident usable with the same safe Mock Mode explanation.
+            explanation = _mock_explanation(selected)
     _validate_model_wording(explanation)
     if explanation.status == "not_recommended":
         assert explanation.abstention_reason is not None

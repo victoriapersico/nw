@@ -20,6 +20,8 @@ from backend.schemas import (
     ExecutionRequest,
     ExecutionResult,
     HealthResponse,
+    IncidentAssistantRequest,
+    IncidentAssistantResponse,
     LiveTickResponse,
     Merchant,
     MerchantMonitoringResponse,
@@ -132,6 +134,27 @@ def merchant_incidents(merchant: Merchant) -> MerchantIncidentsResponse:
         return get_control_tower().incidents_for(merchant)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post(
+    "/incidents/{incident_id}/assistant",
+    response_model=IncidentAssistantResponse,
+)
+def ask_incident_assistant(
+    incident_id: str,
+    request: IncidentAssistantRequest,
+) -> IncidentAssistantResponse:
+    """Answer one operator question from the selected incident evidence only."""
+
+    try:
+        return get_control_tower().answer_incident_question(incident_id, request)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown incident: {exc.args[0]}",
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @app.post("/remediation/simulations", response_model=RoutingRecommendation)
