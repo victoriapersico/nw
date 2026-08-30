@@ -9,6 +9,8 @@ from backend.agent import AgentError, analyze as run_analysis
 from backend.live_control_tower import LiveControlTower, build_live_control_tower
 from backend.schemas import (
     ApprovalDecision,
+    ApprovalRequest,
+    ApprovalRevocationRequest,
     AnalysisRequest,
     AnalysisResponse,
     CreateInjectionRequest,
@@ -141,15 +143,38 @@ def simulate_remediation(request: SimulationRequest) -> RoutingRecommendation:
 
 
 @app.post("/remediation/approvals", response_model=ApprovalDecision)
-def record_remediation_approval(decision: ApprovalDecision) -> ApprovalDecision:
+def record_remediation_approval(request: ApprovalRequest) -> ApprovalDecision:
     """Record a human approval or rejection; it never executes routing."""
 
     try:
-        return get_control_tower().record_approval(decision)
+        return get_control_tower().record_approval(request)
     except KeyError as exc:
         raise HTTPException(
             status_code=404, detail=f"Unknown recommendation: {exc.args[0]}"
         ) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post(
+    "/remediation/approvals/{decision_id}/revoke",
+    response_model=ApprovalDecision,
+)
+def revoke_remediation_approval(
+    decision_id: str, request: ApprovalRevocationRequest
+) -> ApprovalDecision:
+    """Revoke an approved decision before any simulated change is active."""
+
+    try:
+        return get_control_tower().revoke_approval(decision_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown approval: {exc.args[0]}") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/remediation/executions", response_model=ExecutionResult)

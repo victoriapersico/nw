@@ -140,6 +140,11 @@ class RemediationSimulator:
             rollback_reference=f"rollback-{incident.incident_id}",
         )
 
+    def policy_for_id(self, policy_id: str) -> RoutingPolicy | None:
+        """Expose the frozen policy for a final activation-time guardrail check."""
+
+        return next((policy for policy in self._policies if policy.policy_id == policy_id), None)
+
     def _policy_for(
         self, incident: Incident, payment_method: str | None
     ) -> RoutingPolicy | None:

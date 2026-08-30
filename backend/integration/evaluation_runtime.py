@@ -25,6 +25,7 @@ from backend.schemas import (
     InjectionConfig,
     Transaction,
     TransactionBatch,
+    RoutingPolicy,
 )
 from backend.simulator import LiveTransactionSimulator
 
@@ -127,6 +128,11 @@ class ControlTowerEvaluationRuntime:
             diagnosis,
             tuple(self._recent_batches),
         )
+
+    def routing_policy(self, policy_id: str) -> RoutingPolicy | None:
+        if self._remediation_simulator is None:
+            return None
+        return self._remediation_simulator.policy_for_id(policy_id)
 
     def _require_simulator(self) -> LiveTransactionSimulator:
         if self._simulator is None:

@@ -2,7 +2,7 @@
 """Stateful live Control Tower orchestration for the FastAPI demo."""
 
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import RLock
 from uuid import uuid4
 
@@ -17,6 +17,7 @@ from backend.integration.evaluation_runtime import (
     build_runtime,
 )
 from backend.incidents.engine import IncidentEngine
+from backend.remediation.audit_store import RemediationAuditStore
 from backend.schemas import (
     DetectionRequest,
     DiagnosedIncident,
@@ -25,6 +26,8 @@ from backend.schemas import (
     Merchant,
     CountryMonitoringMetric,
     ApprovalDecision,
+    ApprovalRequest,
+    ApprovalRevocationRequest,
     ExecutionRequest,
     ExecutionResult,
     Incident,
@@ -46,6 +49,7 @@ from backend.schemas import (
 LIVE_CHART_WINDOWS = 24
 ROLLBACK_APPROVAL_RATE = 0.80
 ROLLBACK_CONSECUTIVE_WINDOWS = 2
+APPROVAL_TTL = timedelta(minutes=30)
 
 
 class LiveControlTower:
@@ -55,6 +59,7 @@ class LiveControlTower:
         self,
         runtime: ControlTowerEvaluationRuntime,
         initial_scenario: ScenarioDefinition,
+        audit_store: RemediationAuditStore | None = None,
     ) -> None:
         self._runtime = runtime
         self._initial_scenario = initial_scenario
@@ -71,6 +76,7 @@ class LiveControlTower:
         self._change_ids_by_key: dict[str, str] = {}
         self._workflows: dict[str, RoutingWorkflow] = {}
         self._audit_events: list[RemediationAuditEvent] = []
+        self._audit_store = audit_store or RemediationAuditStore()
         self.reset()
 
     def reset(self) -> None:
@@ -153,27 +159,102 @@ class LiveControlTower:
             self._ensure_workflow(proposal)
             return proposal
 
-    def record_approval(self, decision: ApprovalDecision) -> ApprovalDecision:
+    def record_approval(self, request: ApprovalRequest) -> ApprovalDecision:
         """Store a human decision; it authorizes no provider action by itself."""
 
         with self._lock:
-            recommendation, _ = self._recommendation(decision.recommendation_id)
+            existing = next(
+                (
+                    decision
+                    for decision in self._approval_decisions.values()
+                    if decision.idempotency_key == request.idempotency_key
+                ),
+                None,
+            )
+            if existing is not None:
+                return existing.model_copy(deep=True)
+            if request.decision_id in self._approval_decisions:
+                raise ValueError("An approval decision_id cannot be reused with another request.")
+            recommendation, incident = self._recommendation(request.recommendation_id)
+            if request.merchant != incident.merchant:
+                raise PermissionError("The approval merchant does not own this recommendation.")
             workflow = self._ensure_workflow(recommendation)
             if workflow.status not in ("pending_approval", "approved", "rejected"):
                 raise ValueError("A decision cannot be changed after the simulated rollout starts.")
+            selected_simulation = next(
+                (
+                    item
+                    for item in recommendation.alternatives
+                    if item.option.option_id == recommendation.recommended_option_id
+                ),
+                None,
+            )
+            if request.decision == "approved" and (
+                recommendation.status != "recommended"
+                or selected_simulation is None
+                or selected_simulation.status != "eligible"
+            ):
+                raise ValueError("Only an eligible recommended simulation can be approved.")
+            expires_at = request.expires_at or request.decided_at + APPROVAL_TTL
+            status = request.decision
+            if request.decision == "approved" and expires_at <= datetime.now(timezone.utc):
+                status = "expired"
+            approval_payload = request.model_dump()
+            approval_payload["expires_at"] = expires_at
+            decision = ApprovalDecision(
+                **approval_payload,
+                incident_id=incident.incident_id,
+                simulation_option_id=(
+                    selected_simulation.option.option_id if selected_simulation else None
+                ),
+                reviewed_simulation=selected_simulation,
+                reviewed_evidence=self._incidents[incident.incident_id].diagnosis.evidence,
+                status=status,
+            )
             self._approval_decisions[decision.decision_id] = decision
             self._transition_workflow(
                 recommendation.recommendation_id,
-                "approved" if decision.decision == "approved" else "rejected",
-                f"Human decision recorded: {decision.decision}.",
+                status,
+                f"Human decision recorded: {status}.",
             )
             self._record_audit(
                 event_type="approval_recorded",
                 recommendation_id=decision.recommendation_id,
                 actor=decision.decided_by,
-                detail=f"Human decision recorded: {decision.decision}.",
+                detail=f"Human decision recorded: {status}.",
             )
             return decision
+
+    def revoke_approval(
+        self, decision_id: str, request: ApprovalRevocationRequest
+    ) -> ApprovalDecision:
+        """Revoke a still-pending approved decision before a simulation is activated."""
+
+        with self._lock:
+            decision = self._approval_decisions.get(decision_id)
+            if decision is None:
+                raise KeyError(decision_id)
+            workflow = self._workflows[decision.recommendation_id]
+            if request.merchant != decision.merchant:
+                raise PermissionError("The revocation merchant does not own this approval.")
+            if decision.status == "revoked":
+                return decision.model_copy(deep=True)
+            if decision.status != "approved" or workflow.status != "approved":
+                raise ValueError("Only a current approved decision can be revoked.")
+            revoked = decision.model_copy(update={"status": "revoked"})
+            self._approval_decisions[decision_id] = revoked
+            self._transition_workflow(
+                revoked.recommendation_id,
+                "revoked",
+                request.reason,
+            )
+            self._record_audit(
+                event_type="approval_revoked",
+                recommendation_id=revoked.recommendation_id,
+                actor=request.revoked_by,
+                detail=request.reason,
+            )
+            return revoked.model_copy(deep=True)
 
     def request_execution(self, request: ExecutionRequest) -> ExecutionResult:
         """Return a safe dry-run or denial; POST-01 never contacts providers."""
@@ -186,8 +267,8 @@ class LiveControlTower:
             if decision is None or decision.recommendation_id != request.recommendation_id:
                 reason = "Execution denied: an explicit matching approval is required."
                 status = "denied"
-            elif decision.decision != "approved":
-                reason = "Execution denied: the recorded decision is not approved."
+            elif not self._approval_is_valid(decision):
+                reason = "Execution denied: the recorded approval is not current and valid."
                 status = "denied"
             elif request.dry_run:
                 reason = "Dry-run completed. No provider credentials or routing tools exist in POST-01."
@@ -217,8 +298,8 @@ class LiveControlTower:
             decision = self._approval_decisions.get(request.approval_decision_id)
             if decision is None or decision.recommendation_id != recommendation.recommendation_id:
                 raise PermissionError("A matching human approval is required.")
-            if decision.decision != "approved":
-                raise PermissionError("The recorded human decision is not approved.")
+            if not self._approval_is_valid(decision):
+                raise PermissionError("The recorded human approval is expired, revoked, or not approved.")
             if workflow.status != "approved":
                 raise ValueError("The recommendation is not in an approved workflow state.")
             if recommendation.status != "recommended" or not recommendation.recommended_option_id:
@@ -236,6 +317,17 @@ class LiveControlTower:
             )
             if simulation is None:
                 raise ValueError("The selected simulation is no longer eligible.")
+            policy = self._runtime.routing_policy(recommendation.policy_id)
+            if (
+                policy is None
+                or policy.merchant != incident.merchant
+                or policy.country != incident.country
+                or simulation.option.target_provider not in policy.eligible_target_providers
+                or simulation.option.traffic_shift_pct > policy.max_traffic_shift_pct
+                or not policy.dry_run_only
+                or policy.execution_enabled
+            ):
+                raise ValueError("The current routing policy does not permit this simulated change.")
             change = SimulatedRoutingChange(
                 change_id=f"change-{uuid4().hex}",
                 recommendation_id=recommendation.recommendation_id,
@@ -327,11 +419,7 @@ class LiveControlTower:
 
     def remediation_audit(self, recommendation_id: str | None = None) -> list[RemediationAuditEvent]:
         with self._lock:
-            return [
-                event.model_copy(deep=True)
-                for event in self._audit_events
-                if recommendation_id is None or event.recommendation_id == recommendation_id
-            ]
+            return self._audit_store.events(recommendation_id)
 
     def monitoring_for(self, merchant: Merchant) -> MerchantMonitoringResponse:
         """Return measured simulator metrics for the latest live window."""
@@ -503,6 +591,26 @@ class LiveControlTower:
         )
         return rolled_back.model_copy(deep=True)
 
+    def _approval_is_valid(self, decision: ApprovalDecision) -> bool:
+        if decision.status != "approved":
+            return False
+        if decision.expires_at is None or decision.expires_at > datetime.now(timezone.utc):
+            return True
+        expired = decision.model_copy(update={"status": "expired"})
+        self._approval_decisions[decision.decision_id] = expired
+        self._transition_workflow(
+            expired.recommendation_id,
+            "expired",
+            "Approval expired before the simulated change was activated.",
+        )
+        self._record_audit(
+            event_type="approval_expired",
+            recommendation_id=expired.recommendation_id,
+            actor="system",
+            detail="Approval status changed to expired.",
+        )
+        return False
+
     def _ensure_workflow(self, recommendation: RoutingRecommendation) -> RoutingWorkflow:
         """Create the initial state once a recommendation is visible to an operator."""
 
@@ -548,8 +656,7 @@ class LiveControlTower:
         detail: str,
         change_id: str | None = None,
     ) -> None:
-        self._audit_events.append(
-            RemediationAuditEvent(
+        event = RemediationAuditEvent(
                 event_id=f"audit-{uuid4().hex}",
                 occurred_at=datetime.now(timezone.utc),
                 event_type=event_type,
@@ -557,8 +664,9 @@ class LiveControlTower:
                 change_id=change_id,
                 actor=actor,
                 detail=detail,
-            )
         )
+        self._audit_events.append(event)
+        self._audit_store.append(event)
 
 
 def build_live_control_tower() -> LiveControlTower:
