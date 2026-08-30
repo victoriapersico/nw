@@ -1000,5 +1000,58 @@ The API advances simulation on injection and explicit monitoring ticks, rather t
 continuously from the browser. Add polling or a server-driven stream only after the MVP
 flow is stable.
 
+## DEC-032 — Simulate the Yuno webhook boundary before a partner connection
+
+### Decision
+Build the post-MVP Yuno integration against signed, deterministic local fixtures before
+requesting production credentials, public deployment or a live partner endpoint. The
+local receiver lives under `/v1/sandbox/yuno-webhooks` and is explicitly not a
+production integration route.
+
+### Why
+- the team can validate account mapping, HMAC verification, idempotency and safe
+  transaction normalization without exposing payment data;
+- Yuno payload mappings must be confirmed with approved sandbox samples before they
+  become a production contract;
+- synthetic events let us test malformed payloads and duplicate deliveries safely.
+
+### Tradeoff
+The simulated embedded transaction shape is a project fixture, not a claim about every
+Yuno production payload. Before deployment, replace it with an approved adapter,
+environment-managed secrets, persistent idempotency and the partner's HTTPS webhook
+configuration.
+
+## DEC-033 - Render sandbox operational emails through an idempotent local outbox
+
+### Alternatives considered
+1. Send a real email from the demo API.
+2. Show only an API error response.
+3. Render an email into a local, inspectable outbox.
+
+### Decision
+For a signed Yuno sandbox webhook that fails transaction normalization, create one
+`system.integration_error` alert and one rendered email in the local outbox. The demo
+recipient is `payments-ops@yuno-sandbox.local`. Duplicate webhook deliveries do not
+create another alert or email. Invalid signatures are rejected without notification.
+
+The initial supported error catalog is: missing required fields, invalid amount,
+merchant mapping mismatch, invalid payment-method/country combination, unsupported
+webhook schema and generic transaction validation failure.
+
+### Why
+- demonstrates a complete, safe notification flow without SMTP credentials or sending
+  messages to a real person;
+- keeps Yuno integration/data-quality failures distinct from merchant payment
+  performance incidents;
+- makes retries demonstrably idempotent.
+
+### Tradeoff
+The outbox proves rendering and deduplication, not provider delivery. It has no
+persistence, retry policy or bounce handling.
+
+### Revisit
+Before production, replace the local outbox with an approved email or webhook provider,
+encrypted configuration, delivery observability and a persistent idempotency store.
+
 Update this file whenever the team makes a meaningful change that could come up in technical defense.
 
