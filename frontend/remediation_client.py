@@ -20,6 +20,7 @@ def _request_json(
     *,
     payload: dict[str, Any] | None = None,
     params: dict[str, str] | None = None,
+    timeout_seconds: int = 5,
 ) -> dict[str, Any] | list[dict[str, Any]]:
     try:
         response = requests.request(
@@ -27,7 +28,7 @@ def _request_json(
             f"{base_url}{path}",
             json=payload,
             params=params,
-            timeout=5,
+            timeout=timeout_seconds,
         )
     except requests.RequestException as exc:
         raise RemediationClientError(
@@ -65,6 +66,9 @@ def ask_incident_assistant(
         base_url,
         f"/incidents/{incident_id}/assistant",
         payload={"merchant": merchant, "question": question},
+        # The evidence-backed LLM call can exceed the short timeout used by
+        # ordinary dashboard actions. Keep this local to the assistant.
+        timeout_seconds=45,
     )
     assert isinstance(result, dict)
     return result
