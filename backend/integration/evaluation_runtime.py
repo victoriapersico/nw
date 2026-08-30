@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from backend.ai.routing_recommendation import recommend_routing
 from backend.baseline.seasonal import SeasonalBaseline
 from backend.config import settings
 from backend.detector.config import DetectorConfig
@@ -25,6 +26,7 @@ from backend.schemas import (
     InjectionConfig,
     Transaction,
     TransactionBatch,
+    RoutingPolicy,
 )
 from backend.simulator import LiveTransactionSimulator
 
@@ -118,15 +120,30 @@ class ControlTowerEvaluationRuntime:
     def propose_remediation(
         self, incident: Incident, diagnosis: Diagnosis
     ):
-        """Evaluate alternatives from known evidence; this never changes routing."""
+        """Simulate first, then obtain an evidence-bound recommendation."""
 
         if self._remediation_simulator is None:
             return None
-        return self._remediation_simulator.propose(
+        simulation_proposal = self._remediation_simulator.propose(
             incident,
             diagnosis,
             tuple(self._recent_batches),
         )
+        policy = self._remediation_simulator.policy_by_id(
+            simulation_proposal.policy_id
+        )
+        if policy is None:
+            return simulation_proposal
+        return recommend_routing(
+            diagnosis,
+            policy,
+            simulation_proposal.alternatives,
+        )
+
+    def routing_policy(self, policy_id: str) -> RoutingPolicy | None:
+        if self._remediation_simulator is None:
+            return None
+        return self._remediation_simulator.policy_for_id(policy_id)
 
     def _require_simulator(self) -> LiveTransactionSimulator:
         if self._simulator is None:
