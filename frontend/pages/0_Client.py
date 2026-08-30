@@ -10,6 +10,7 @@ import csv
 from typing import Any
 
 import streamlit as st
+from dotenv import load_dotenv
 
 from backend.schemas import InjectionConfig
 from frontend.alerts_client import (
@@ -25,6 +26,8 @@ from frontend.injection_scope import (
 )
 from frontend.incident_assistant_ui import render_incident_assistant
 from frontend.remediation_ui import render_remediation_panel
+
+load_dotenv()
 
 API_BASE_URL = os.getenv(
     "CONTROL_TOWER_API_URL",
@@ -1269,10 +1272,20 @@ def render_live_summary() -> None:
 
     if snapshot is None:
         detail = st.session_state.get("live_api_error")
-        st.warning(
-            "Waiting for the live Control Tower API. Start FastAPI to begin monitoring."
-            + (f" Details: {detail}" if detail else "")
+        st.info(
+            "Monitoring is reconnecting.",
+            icon=":material/sync:",
         )
+        st.caption(
+            "Start FastAPI or verify CONTROL_TOWER_API_URL. Live metrics will "
+            "appear automatically when the local service is available."
+        )
+        if detail:
+            with st.expander(
+                "Connection details",
+                icon=":material/troubleshoot:",
+            ):
+                st.caption(str(detail))
         return
 
     active = fetch_merchant_incidents(merchant)
