@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -79,6 +80,20 @@ def get_json(path: str) -> Any | None:
         return None
 
 
+def load_healthy_api_baseline() -> bool:
+    """Load only local, deterministic sandbox telemetry for the presentation."""
+
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/v1/sandbox/yuno-api-demo-seed",
+            timeout=5,
+        )
+        response.raise_for_status()
+        return True
+    except requests.RequestException:
+        return False
+
+
 def render_result() -> None:
     result = st.session_state.get("yuno_last_result")
     if not result:
@@ -150,7 +165,7 @@ st.markdown(
     </style>
     <div class="hero">
       <div class="eyebrow">NextWave × Yuno · sandbox integration</div>
-      <h1>Payment integration operations</h1>
+      <h1>Yuno API Operations</h1>
       <p>Validate partner webhooks, isolate technical failures, and notify the right
       operations team — without confusing integration issues with merchant performance.</p>
     </div>
@@ -159,14 +174,39 @@ st.markdown(
 )
 
 api_healthy = get_json("/health") is not None
+api_health = get_json("/v1/sandbox/yuno-api-health")
 top_left, top_right = st.columns([3, 1])
 with top_left:
     st.caption("Demo account: `yuno-rappi-sandbox` · Local sandbox only")
 with top_right:
     st.success("API connected" if api_healthy else "API unavailable")
 
-st.markdown("### Try a Yuno webhook scenario")
-st.caption("Each button sends one preconfigured sandbox event. The result remains visible below.")
+st.markdown("### API health")
+if api_health is None:
+    st.warning("API telemetry is unavailable. Start FastAPI to load the API Manager.")
+else:
+    status = api_health["status"]
+    if status == "healthy":
+        st.success("Healthy — all observed requests were accepted.")
+    elif status == "attention":
+        st.warning("Attention — trusted requests were rejected and need review.")
+    elif status == "degraded":
+        st.error("Degraded — API error rate is above the sandbox threshold.")
+    else:
+        st.info("Idle — send sandbox traffic to begin API health monitoring.")
+    metric_one, metric_two, metric_three, metric_four = st.columns(4)
+    metric_one.metric("Requests", api_health["total_requests"])
+    metric_two.metric("Success rate", f"{api_health['success_rate']:.0%}")
+    metric_three.metric("P95 latency", f"{api_health['p95_latency_ms']:.1f} ms")
+    metric_four.metric("Trusted API errors", api_health["rejected_requests"])
+    if api_health["total_requests"] == 0:
+        if st.button("Load healthy sandbox baseline", type="primary"):
+            if load_healthy_api_baseline():
+                st.rerun()
+            st.error("Could not load the sandbox baseline. Check FastAPI.")
+
+st.markdown("### Sandbox traffic simulator")
+st.caption("Use these controls to create observable API traffic and verify alert behavior.")
 for row_start in range(0, len(SCENARIOS), 3):
     columns = st.columns(3)
     for column, (scenario, title, description, kind) in zip(
@@ -222,8 +262,14 @@ with right:
         unsafe_allow_html=True,
     )
 
-alerts_tab, emails_tab, contract_tab = st.tabs(
-    ["System alerts", "Notification emails", "API contract"]
+alerts_tab, emails_tab, telemetry_tab, activity_tab, contract_tab = st.tabs(
+    [
+        "API alerts",
+        "Notification emails",
+        "Request telemetry",
+        "Activity log",
+        "API contract",
+    ]
 )
 with alerts_tab:
     alerts = get_json(f"/v1/sandbox/yuno-system-alerts/{YUNO_ACCOUNT_ID}")
@@ -250,6 +296,42 @@ with emails_tab:
             with st.expander(f"{email['subject']} · {email['created_at']}"):
                 st.caption(f"To: {email['to']}")
                 st.code(email["text_body"], language=None)
+with telemetry_tab:
+    api_health = get_json("/v1/sandbox/yuno-api-health")
+    if api_health is None:
+        st.info("Start the API to inspect request telemetry.")
+    elif not api_health["recent_events"]:
+        st.info("No sandbox requests recorded yet.")
+    else:
+        for event in api_health["recent_events"]:
+            st.markdown(
+                f"**{event['outcome'].upper()}** · "
+                f"{event['latency_ms']:.1f} ms · "
+                f"{event.get('error_code') or 'no_error'}"
+            )
+            st.caption(event["occurred_at"])
+with activity_tab:
+    activity_log = get_json("/v1/sandbox/yuno-api-log")
+    if activity_log is None:
+        st.info("Start the API to inspect the activity log.")
+    elif not activity_log:
+        st.info("No API movements recorded yet. Send a sandbox request to begin the log.")
+    else:
+        st.download_button(
+            "Download audit log (JSON)",
+            data=json.dumps(activity_log, indent=2),
+            file_name="yuno-api-activity-log.json",
+            mime="application/json",
+        )
+        for event in activity_log:
+            with st.expander(
+                f"{event['outcome'].upper()} · {event['source_event_id']}",
+                expanded=False,
+            ):
+                st.markdown(f"**Timestamp:** {event['occurred_at']}")
+                st.markdown(f"**Account:** {event.get('account_id') or 'untrusted/unknown'}")
+                st.markdown(f"**Latency:** {event['latency_ms']:.1f} ms")
+                st.markdown(f"**Error:** `{event.get('error_code') or 'none'}`")
 with contract_tab:
     st.markdown("Open the interactive FastAPI documentation for technical review:")
     st.code(f"{API_BASE_URL}/docs", language=None)

@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.schemas import Transaction
 from backend.yuno_mock import (
+    MockYunoApiTelemetry,
     MockYunoWebhookIngestor,
     YunoMockWebhookError,
     build_payment_webhook,
@@ -223,3 +224,42 @@ def test_demo_scenarios_build_signed_fixtures() -> None:
             assert signature == "not-a-real-signature"
         else:
             assert signature == sign_webhook(payload)
+
+
+def test_api_manager_health_exposes_safe_request_telemetry() -> None:
+    client = TestClient(app)
+    payload = build_payment_webhook(
+        _declined_rappi_transaction(),
+        account_id="yuno-rappi-sandbox",
+        event_id="yuno-event-api-health-001",
+    )
+    client.post(
+        "/v1/sandbox/yuno-webhooks",
+        json=payload,
+        headers={"x-hmac-signature": sign_webhook(payload)},
+    )
+
+    response = client.get("/v1/sandbox/yuno-api-health")
+
+    assert response.status_code == 200
+    health = response.json()
+    assert health["total_requests"] >= 1
+    assert health["accepted_requests"] >= 1
+    assert 0 <= health["success_rate"] <= 1
+    assert health["recent_events"]
+
+    activity_log = client.get("/v1/sandbox/yuno-api-log")
+    assert activity_log.status_code == 200
+    assert any(
+        event["source_event_id"] == "yuno-event-api-health-001"
+        and event["outcome"] == "accepted"
+        for event in activity_log.json()
+    )
+
+
+def test_api_manager_can_seed_a_healthy_sandbox_baseline() -> None:
+    health = MockYunoApiTelemetry().seed_healthy_baseline()
+
+    assert health.accepted_requests >= 12
+    assert health.duplicate_requests >= 2
+    assert health.status == "healthy"

@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 from functools import lru_cache
+from time import perf_counter
 
 from fastapi import FastAPI, HTTPException, Request
 
@@ -24,6 +25,9 @@ from backend.yuno_mock import (
     MOCK_ACCOUNT_MERCHANTS,
     MockYunoSystemAlert,
     MockYunoSystemAlertOutbox,
+    MockYunoApiEvent,
+    MockYunoApiHealth,
+    MockYunoApiTelemetry,
     MockYunoWebhookIngestor,
     MockYunoWebhookReceipt,
     YunoMockWebhookError,
@@ -48,6 +52,7 @@ app = FastAPI(
 mock_yuno_ingestor = MockYunoWebhookIngestor()
 mock_yuno_system_alert_outbox = MockYunoSystemAlertOutbox()
 mock_yuno_email_outbox = MockEmailOutbox()
+mock_yuno_api_telemetry = MockYunoApiTelemetry()
 
 
 @lru_cache(maxsize=1)
@@ -69,9 +74,11 @@ def health() -> HealthResponse:
 async def receive_mock_yuno_webhook(request: Request) -> MockYunoWebhookReceipt:
     """Receive a signed local Yuno fixture; not a production integration endpoint."""
 
+    started_at = perf_counter()
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="webhook payload must be an object")
+    source_event_id = str(payload.get("idempotency_key", "unidentified-request"))
     try:
         ingested = mock_yuno_ingestor.ingest(
             payload,
@@ -79,10 +86,16 @@ async def receive_mock_yuno_webhook(request: Request) -> MockYunoWebhookReceipt:
         )
     except YunoMockWebhookError as exc:
         if not exc.trusted:
+            mock_yuno_api_telemetry.record(
+                source_event_id=source_event_id,
+                account_id=None,
+                outcome="unauthorized",
+                latency_ms=(perf_counter() - started_at) * 1000,
+                error_code=exc.error_code,
+            )
             raise HTTPException(status_code=401, detail=str(exc)) from exc
 
         account_id = str(payload.get("account_id", ""))
-        source_event_id = str(payload.get("idempotency_key", "invalid-event"))
         alert = None
         if account_id in MOCK_ACCOUNT_MERCHANTS:
             alert = mock_yuno_system_alert_outbox.notify_failure(
@@ -97,6 +110,13 @@ async def receive_mock_yuno_webhook(request: Request) -> MockYunoWebhookReceipt:
             )
         if alert is not None:
             mock_yuno_email_outbox.send_yuno_system_alert(alert)
+        mock_yuno_api_telemetry.record(
+            source_event_id=source_event_id,
+            account_id=account_id if account_id in MOCK_ACCOUNT_MERCHANTS else None,
+            outcome="duplicate" if alert is None else "rejected",
+            latency_ms=(perf_counter() - started_at) * 1000,
+            error_code=exc.error_code,
+        )
         return MockYunoWebhookReceipt(
             event_id=source_event_id,
             accepted=False,
@@ -104,6 +124,12 @@ async def receive_mock_yuno_webhook(request: Request) -> MockYunoWebhookReceipt:
             error_code=exc.error_code,
         )
 
+    mock_yuno_api_telemetry.record(
+        source_event_id=source_event_id,
+        account_id=str(payload.get("account_id", "")) or None,
+        outcome="duplicate" if ingested.duplicate else "accepted",
+        latency_ms=(perf_counter() - started_at) * 1000,
+    )
     return MockYunoWebhookReceipt(
         event_id=ingested.event_id,
         accepted=True,
@@ -132,6 +158,36 @@ def mock_yuno_email_messages() -> list[MockEmailMessage]:
     """Inspect rendered demo emails without sending an external message."""
 
     return list(mock_yuno_email_outbox.messages)
+
+
+@app.get(
+    "/v1/sandbox/yuno-api-health",
+    response_model=MockYunoApiHealth,
+)
+def mock_yuno_api_health() -> MockYunoApiHealth:
+    """Return safe API-manager health aggregates for the local Yuno sandbox."""
+
+    return mock_yuno_api_telemetry.health_for()
+
+
+@app.post(
+    "/v1/sandbox/yuno-api-demo-seed",
+    response_model=MockYunoApiHealth,
+)
+def seed_mock_yuno_api_baseline() -> MockYunoApiHealth:
+    """Load a small healthy sandbox baseline for the Yuno API Manager demo."""
+
+    return mock_yuno_api_telemetry.seed_healthy_baseline()
+
+
+@app.get(
+    "/v1/sandbox/yuno-api-log",
+    response_model=list[MockYunoApiEvent],
+)
+def mock_yuno_api_log() -> list[MockYunoApiEvent]:
+    """Return the sandbox API activity log, newest record first."""
+
+    return list(mock_yuno_api_telemetry.events_for())
 
 
 @app.post("/injections", response_model=CreateInjectionResponse)

@@ -13,7 +13,7 @@ import hmac
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -171,6 +171,141 @@ class MockYunoSystemAlertOutbox:
         return tuple(
             alert for alert in self._alerts if alert.yuno_account_id == account_id
         )
+
+
+class MockYunoApiEvent(BaseModel):
+    """One safe telemetry record for the Yuno API Manager sandbox."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    occurred_at: datetime
+    source_event_id: str = Field(min_length=1)
+    account_id: str | None = None
+    outcome: Literal["accepted", "rejected", "duplicate", "unauthorized"]
+    latency_ms: float = Field(ge=0)
+    error_code: str | None = None
+
+
+class MockYunoApiHealth(BaseModel):
+    """Aggregated integration health; no raw payment payloads are returned."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: str = "all_sandbox_accounts"
+    status: Literal["idle", "healthy", "attention", "degraded"]
+    total_requests: int = Field(ge=0)
+    accepted_requests: int = Field(ge=0)
+    rejected_requests: int = Field(ge=0)
+    duplicate_requests: int = Field(ge=0)
+    unauthorized_requests: int = Field(ge=0)
+    success_rate: float = Field(ge=0, le=1)
+    p95_latency_ms: float = Field(ge=0)
+    error_breakdown: dict[str, int] = Field(default_factory=dict)
+    recent_events: list[MockYunoApiEvent] = Field(default_factory=list)
+
+
+class MockYunoApiTelemetry:
+    """In-memory API observability for the presentation sandbox."""
+
+    def __init__(self) -> None:
+        self._events: list[MockYunoApiEvent] = []
+
+    def record(
+        self,
+        *,
+        source_event_id: str,
+        account_id: str | None,
+        outcome: Literal["accepted", "rejected", "duplicate", "unauthorized"],
+        latency_ms: float,
+        error_code: str | None = None,
+    ) -> None:
+        self._events.append(
+            MockYunoApiEvent(
+                occurred_at=datetime.now(timezone.utc),
+                source_event_id=source_event_id,
+                account_id=account_id,
+                outcome=outcome,
+                latency_ms=latency_ms,
+                error_code=error_code,
+            )
+        )
+
+    def health_for(self, account_id: str | None = None) -> MockYunoApiHealth:
+        events = [
+            event
+            for event in self._events
+            if account_id is None or event.account_id == account_id
+        ]
+        total = len(events)
+        accepted = sum(event.outcome == "accepted" for event in events)
+        rejected = sum(event.outcome == "rejected" for event in events)
+        duplicates = sum(event.outcome == "duplicate" for event in events)
+        unauthorized = sum(event.outcome == "unauthorized" for event in events)
+        failures = rejected + unauthorized
+        error_breakdown: dict[str, int] = {}
+        for event in events:
+            if event.error_code:
+                error_breakdown[event.error_code] = (
+                    error_breakdown.get(event.error_code, 0) + 1
+                )
+        sorted_latencies = sorted(event.latency_ms for event in events)
+        p95_index = max(0, int(len(sorted_latencies) * 0.95) - 1)
+        p95 = sorted_latencies[p95_index] if sorted_latencies else 0.0
+        error_rate = failures / total if total else 0.0
+        status: Literal["idle", "healthy", "attention", "degraded"]
+        if not total:
+            status = "idle"
+        elif error_rate >= 0.10:
+            status = "degraded"
+        elif error_rate > 0:
+            status = "attention"
+        else:
+            status = "healthy"
+        return MockYunoApiHealth(
+            account_id=account_id or "all_sandbox_accounts",
+            status=status,
+            total_requests=total,
+            accepted_requests=accepted,
+            rejected_requests=rejected,
+            duplicate_requests=duplicates,
+            unauthorized_requests=unauthorized,
+            success_rate=accepted / total if total else 0.0,
+            p95_latency_ms=p95,
+            error_breakdown=error_breakdown,
+            recent_events=list(reversed(events[-10:])),
+        )
+
+    def events_for(self, account_id: str | None = None) -> tuple[MockYunoApiEvent, ...]:
+        """Return newest-first API audit records without exposing raw payloads."""
+
+        events = [
+            event
+            for event in self._events
+            if account_id is None or event.account_id == account_id
+        ]
+        return tuple(reversed(events))
+
+    def seed_healthy_baseline(self) -> MockYunoApiHealth:
+        """Load small, clearly synthetic healthy traffic for a presentation baseline."""
+
+        if self._events:
+            return self.health_for()
+
+        for index in range(1, 13):
+            self.record(
+                source_event_id=f"yuno-demo-baseline-{index:03d}",
+                account_id="yuno-rappi-sandbox",
+                outcome="accepted",
+                latency_ms=32.0 + index * 2.5,
+            )
+        for index in range(1, 3):
+            self.record(
+                source_event_id=f"yuno-demo-retry-{index:03d}",
+                account_id="yuno-rappi-sandbox",
+                outcome="duplicate",
+                latency_ms=28.0 + index * 2.0,
+            )
+        return self.health_for()
 
 
 def build_payment_webhook(
