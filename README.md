@@ -86,9 +86,10 @@ detector, money calculation, IncidentEngine, and RCA; only the final wording is
 local and deterministic. This avoids making the judge demo depend on Wi-Fi or an
 external API.
 
-For an intentional OpenAI narration test, set a valid `OPENAI_API_KEY` and
-`MOCK_MODE=false`. Do not use that as the primary presentation mode: automatic
-fallback after an OpenAI request failure is not yet guaranteed.
+For an intentional OpenAI narration and incident-assistant test, set a valid
+`OPENAI_API_KEY` and `MOCK_MODE=false`. If OpenAI is unavailable, diagnosis
+narration, routing rationale, and incident Q&A fall back to deterministic,
+evidence-bound wording so the detected incident remains usable.
 
 Never commit `.env`, API keys, tokens, or credentials.
 
@@ -136,7 +137,9 @@ required.
 7. For an eligible routing recommendation, click **Approve recommendation** and
    then **Simulate application**. Inspect the before/expected/observed metrics and
    audit log, then choose **Revert simulated change** or **Complete review**.
-8. Click **Reset demo** before repeating. This calls `POST /monitor/reset`; it is
+8. Ask the incident assistant about the root cause, impact, or selected
+   simulation and expand **Evidence used** to inspect its supporting facts.
+9. Click **Reset demo** before repeating. This calls `POST /monitor/reset`; it is
    not a Streamlit-only reset.
 
 Known-good injection: **Rappi · Brazil · Stripe · target 20% · 6 windows**.
@@ -213,8 +216,9 @@ the exact UI contract, reset behavior, and scope rationale.
   loss ground truth, so no loss-error accuracy is claimed.
 - Runtime state is in memory: no database, authentication, durable incident
   history, multi-user isolation, or automatic remediation.
-- If the OpenAI path is unhealthy, restart with `MOCK_MODE=true`. The deterministic
-  product pipeline remains fully functional without an API key.
+- If the OpenAI path is unhealthy, the application automatically uses its
+  deterministic evidence-bound fallback. `MOCK_MODE=true` remains the most
+  predictable presentation mode and the full product works without an API key.
 
 ## Main API paths
 
@@ -226,6 +230,7 @@ the exact UI contract, reset behavior, and scope rationale.
 | `POST` | `/monitor/reset` | Clean simulator/detector/RCA/live lifecycle |
 | `POST` | `/injections` | Activate a judge-controlled simulator change |
 | `GET` | `/merchants/{merchant}/incidents` | Merchant-scoped diagnosed incidents in backend priority order |
+| `POST` | `/incidents/{incident_id}/assistant` | Evidence-only Q&A for one merchant-owned incident |
 | `POST` | `/remediation/approvals` | Record a human approval or rejection |
 | `GET` | `/remediation/workflows/{recommendation_id}` | Read the human-gated workflow state |
 | `POST` | `/remediation/changes` | Activate a local dry-run change after approval |
