@@ -167,6 +167,14 @@ class IncidentMemoryStore:
             rows = connection.execute(query, parameters).fetchall()
         return [Alert.model_validate_json(row[0]) for row in rows]
 
+    def clear_demo_state(self) -> None:
+        """Remove local demo history when an operator explicitly starts over."""
+
+        with self._connection() as connection:
+            connection.execute("DELETE FROM alerts")
+            connection.execute("DELETE FROM post_incident_reports")
+            connection.execute("DELETE FROM incident_memory_cases")
+
     def acknowledge_alert(self, alert_id: str, acknowledged_by: str) -> Alert:
         with self._connection() as connection:
             row = connection.execute(

@@ -598,7 +598,7 @@ class SimilarIncident(BaseModel):
 
 
 class Alert(BaseModel):
-    """A local operator notification; delivery integrations are intentionally absent."""
+    """A local operator notification, optionally delivered best-effort to Telegram."""
 
     model_config = ConfigDict(extra="forbid")
 

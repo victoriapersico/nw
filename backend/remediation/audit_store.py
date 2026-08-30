@@ -53,5 +53,11 @@ class RemediationAuditStore:
             rows = connection.execute(query, parameters).fetchall()
         return [RemediationAuditEvent.model_validate_json(row[0]) for row in rows]
 
+    def clear_demo_state(self) -> None:
+        """Remove persisted audit history for an explicit clean demo reset."""
+
+        with self._connection() as connection:
+            connection.execute("DELETE FROM remediation_audit_events")
+
     def _connection(self) -> sqlite3.Connection:
         return sqlite3.connect(self._path)

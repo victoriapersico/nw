@@ -23,6 +23,7 @@ from backend.integration.evaluation_runtime import (
 from backend.incidents.engine import IncidentEngine
 from backend.incidents.memory_store import IncidentMemoryStore
 from backend.remediation.audit_store import RemediationAuditStore
+from backend.telegram_notifications import TelegramIncidentNotifier
 from backend.schemas import (
     DetectionRequest,
     DiagnosedIncident,
@@ -84,6 +85,7 @@ class LiveControlTower:
         initial_scenario: ScenarioDefinition,
         audit_store: RemediationAuditStore | None = None,
         incident_memory_store: IncidentMemoryStore | None = None,
+        telegram_notifier: TelegramIncidentNotifier | None = None,
     ) -> None:
         self._runtime = runtime
         self._initial_scenario = initial_scenario
@@ -102,10 +104,13 @@ class LiveControlTower:
         self._audit_events: list[RemediationAuditEvent] = []
         self._audit_store = audit_store or RemediationAuditStore()
         self._incident_memory_store = incident_memory_store or IncidentMemoryStore()
+        # Directly constructed towers (especially tests) are intentionally silent.
+        # The FastAPI runtime opts in explicitly in build_live_control_tower().
+        self._telegram_notifier = telegram_notifier or TelegramIncidentNotifier()
         self.reset()
 
-    def reset(self) -> None:
-        """Restore the deterministic initial demo state without stale incidents."""
+    def reset(self, *, clear_persisted_state: bool = False) -> None:
+        """Restore deterministic simulator state, optionally clearing demo history."""
 
         with self._lock:
             self._runtime.reset(self._initial_scenario)
@@ -118,6 +123,9 @@ class LiveControlTower:
             self._change_ids_by_key.clear()
             self._workflows.clear()
             self._audit_events.clear()
+            if clear_persisted_state:
+                self._incident_memory_store.clear_demo_state()
+                self._audit_store.clear_demo_state()
 
     def latest_batch(self) -> TransactionBatch | None:
         """Return a defensive copy of the latest real simulator batch."""
@@ -684,6 +692,8 @@ class LiveControlTower:
                     "severity": incident.severity,
                 },
             )
+            # External delivery is best-effort and never changes incident state.
+            self._telegram_notifier.notify_incident(incident)
             if remediation is not None:
                 self._register_recommendation(remediation)
             diagnosed_incidents.append(diagnosed)
@@ -1144,4 +1154,8 @@ def build_live_control_tower() -> LiveControlTower:
         expectation=ScenarioExpectation(outcome="no_alert"),
         volume_per_window=DEFAULT_LIVE_VOLUME_PER_WINDOW,
     )
-    return LiveControlTower(runtime, initial_scenario)
+    return LiveControlTower(
+        runtime,
+        initial_scenario,
+        telegram_notifier=TelegramIncidentNotifier.from_environment(),
+    )

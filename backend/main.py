@@ -98,10 +98,10 @@ def advance_monitoring() -> LiveTickResponse:
 
 @app.post("/monitor/reset", response_model=HealthResponse)
 def reset_monitoring() -> HealthResponse:
-    """Restore the deterministic live demo to its clean initial state."""
+    """Restore a clean deterministic demo, including local inbox and audit history."""
 
     try:
-        get_control_tower().reset()
+        get_control_tower().reset(clear_persisted_state=True)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return HealthResponse(status="ok")

@@ -77,6 +77,19 @@ def test_incident_alerts_are_acknowledgeable_and_report_is_persisted() -> None:
         assert client.get(f"/incidents/{incident_id}/post-incident-report").json() == report.json()
 
 
+def test_demo_reset_clears_local_alert_and_audit_history() -> None:
+    with TestClient(app) as client:
+        _inject_same_failure(client)
+        assert client.get("/alerts").json()
+        assert client.get("/remediation/audit").json()
+
+        reset = client.post("/monitor/reset")
+
+        assert reset.status_code == 200
+        assert client.get("/alerts").json() == []
+        assert client.get("/remediation/audit").json() == []
+
+
 def test_terminal_report_persists_decision_monitoring_and_recurrence() -> None:
     with TestClient(app) as client:
         incident_id = _inject_same_failure(client)
