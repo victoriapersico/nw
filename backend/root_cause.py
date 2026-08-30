@@ -23,6 +23,7 @@ SINGLE_DIMENSIONS: tuple[DimensionTuple, ...] = (
 INTERSECTION_DIMENSIONS: tuple[DimensionTuple, ...] = (
     ("provider", "payment_method"),
     ("provider", "issuing_bank"),
+    ("payment_method", "issuing_bank"),
     ("provider", "payment_method", "issuing_bank"),
 )
 HISTORICAL_GROUPINGS: tuple[DimensionTuple, ...] = (
@@ -510,6 +511,92 @@ class RootCauseAnalyzer:
 
         if not hypotheses:
             return None, 0.0, "No candidate slice dominates its peer group."
+
+        # A bank-only outage naturally makes several provider and payment
+        # method slices look unhealthy. Keep the normal intersection-first
+        # path unless one single-dimension candidate explains at least 80% of
+        # loss and materially exceeds every other single-dimension hypothesis.
+        # That preserves genuine intersections while avoiding false abstention
+        # for an overwhelmingly supported bank/provider/method cause.
+        by_explained_loss = sorted(
+            hypotheses,
+            key=lambda item: item[0].excess_loss,
+            reverse=True,
+        )
+        dominant_candidate, dominant_dominance = by_explained_loss[0]
+        runner_up_loss = (
+            by_explained_loss[1][0].excess_loss
+            if len(by_explained_loss) > 1
+            else 0.0
+        )
+        if (
+            dominant_candidate.explained_loss_share >= 0.80
+            and dominant_candidate.excess_loss >= runner_up_loss * 1.20
+            and not self._has_competing_candidate(dominant_candidate, candidates)
+        ):
+            return (
+                dominant_candidate,
+                dominant_dominance,
+                "One single-dimension slice explains the clear majority of loss.",
+            )
+
+        # A bank outage spreads its loss across providers and payment methods.
+        # Those compatible slices are supporting evidence, not a conflicting
+        # cause. Preserve the bank in the diagnosis when it explains most of
+        # the loss and no other bank competes; retain a well-supported
+        # provider/bank or method/bank refinement when one is available.
+        bank_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.eligible and candidate.dimensions == ("issuing_bank",)
+        ]
+        if bank_candidates:
+            bank_primary = max(bank_candidates, key=lambda candidate: candidate.excess_loss)
+            strongest_non_bank_drop = max(
+                (
+                    candidate.approval_drop
+                    for candidate, _ in hypotheses
+                    if candidate.dimensions != ("issuing_bank",)
+                ),
+                default=0.0,
+            )
+            if (
+                bank_primary.explained_loss_share
+                >= self.config.minimum_explained_loss_share
+                and bank_primary.approval_drop >= strongest_non_bank_drop * 2
+                and not self._has_competing_candidate(bank_primary, candidates)
+            ):
+                refinements = [
+                    candidate
+                    for candidate in candidates
+                    if candidate.eligible
+                    and self._extends(candidate, bank_primary)
+                    and candidate.excess_loss
+                    >= bank_primary.excess_loss * self.config.specificity_retention
+                ]
+                primary = (
+                    sorted(
+                        refinements,
+                        key=lambda candidate: (
+                            -len(candidate.dimensions),
+                            *self._candidate_sort_key(candidate),
+                        ),
+                    )[0]
+                    if refinements
+                    else bank_primary
+                )
+                return (
+                    primary,
+                    next(
+                        (
+                            dominance
+                            for candidate, dominance in hypotheses
+                            if candidate == bank_primary
+                        ),
+                        1.0,
+                    ),
+                    "An issuing-bank slice explains the clear majority of loss.",
+                )
 
         hypotheses.sort(key=lambda item: self._candidate_sort_key(item[0]))
         if len(hypotheses) > 1:

@@ -35,7 +35,11 @@ from backend.schemas import (
 )
 
 
-LIVE_CHART_WINDOWS = 24
+# A five-minute simulator window needs 8,640 observations to retain 30 days.
+# The frontend downsamples this data for rendering, so the API can retain a
+# useful monthly operational horizon without creating a huge SVG in the browser.
+LIVE_HISTORY_DAYS = 30
+LIVE_CHART_WINDOWS = LIVE_HISTORY_DAYS * 24 * 12
 
 
 class LiveControlTower:
@@ -81,15 +85,17 @@ class LiveControlTower:
             )
 
     def inject(self, config: InjectionConfig) -> str:
-        """Apply an injection only to the simulator, then advance two
+        """Apply an injection only to the simulator, then advance six
         windows."""
 
         with self._lock:
             self._runtime.apply_injection(config)
 
             # The detector requires two consecutive anomalous time windows.
-            self._advance_locked()
-            self._advance_locked()
+            # Six windows give narrower, low-volume bank slices multiple
+            # consecutive opportunities to cross that threshold.
+            for _ in range(6):
+                self._advance_locked()
 
             return f"inj-{uuid4().hex}"
 
