@@ -217,6 +217,120 @@ class DiagnosisResponse(BaseModel):
 
     diagnosis: Diagnosis
 
+
+class RoutingPolicy(BaseModel):
+    """Explicit per-merchant limits used before any recommendation is produced."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    policy_id: str = Field(min_length=1, max_length=128)
+    merchant: Merchant
+    country: Country
+    payment_method: PaymentMethod | None = None
+    eligible_target_providers: list[Provider] = Field(min_length=1)
+    max_traffic_shift_pct: float = Field(gt=0, le=1, default=0.50)
+    dry_run_only: bool = True
+    execution_enabled: bool = False
+
+
+class RemediationOption(BaseModel):
+    """A bounded, human-approvable traffic-shift alternative."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    option_id: str = Field(min_length=1, max_length=128)
+    target_provider: Provider
+    traffic_shift_pct: float = Field(gt=0, le=1)
+
+
+class SimulationRequest(BaseModel):
+    """Ask to re-evaluate an already-detected incident; no raw route controls."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    merchant: Merchant
+    incident_id: str = Field(min_length=1, max_length=128)
+    dry_run: Literal[True] = True
+    idempotency_key: str = Field(min_length=8, max_length=128)
+
+
+class SimulationResult(BaseModel):
+    """Deterministic estimate for one possible remediation; never an execution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    option: RemediationOption
+    status: Literal["eligible", "blocked", "inconclusive"]
+    expected_approval_rate: float | None = Field(default=None, ge=0, le=1)
+    expected_recovered_value_per_hour: float = Field(ge=0)
+    expected_incremental_cost_per_hour: float = Field(ge=0)
+    confidence: float = Field(ge=0, le=1)
+    assumptions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    rejection_reason: str | None = Field(default=None, max_length=500)
+
+
+class RoutingRecommendation(BaseModel):
+    """Read-only recommendation produced from deterministic simulations."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recommendation_id: str = Field(min_length=1, max_length=128)
+    incident_id: str = Field(min_length=1, max_length=128)
+    policy_id: str = Field(min_length=1, max_length=128)
+    status: Literal["recommended", "not_recommended"]
+    recommended_option_id: str | None = Field(default=None, max_length=128)
+    alternatives: list[SimulationResult] = Field(default_factory=list)
+    rationale: str = Field(min_length=1, max_length=1_000)
+    rollback_condition: str | None = Field(default=None, max_length=1_000)
+    rollback_reference: str | None = Field(default=None, max_length=128)
+    required_approval: Literal["merchant_operations"] = "merchant_operations"
+    dry_run: Literal[True] = True
+
+
+class ApprovalDecision(BaseModel):
+    """Human decision recorded before an execution request can be considered."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision_id: str = Field(min_length=1, max_length=128)
+    recommendation_id: str = Field(min_length=1, max_length=128)
+    decision: Literal["approved", "rejected"]
+    decided_by: str = Field(min_length=1, max_length=128)
+    decided_at: datetime
+    note: str | None = Field(default=None, max_length=1_000)
+
+
+class ExecutionRequest(BaseModel):
+    """Contract only: this MVP has no provider execution capability."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recommendation_id: str = Field(min_length=1, max_length=128)
+    approval_decision_id: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    rollback_reference: str = Field(min_length=1, max_length=128)
+    dry_run: bool = True
+
+
+class ExecutionResult(BaseModel):
+    """Always denied or dry-run in POST-01; no provider action is performed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    execution_id: str = Field(min_length=1, max_length=128)
+    recommendation_id: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    status: Literal["denied", "dry_run"]
+    executed: Literal[False] = False
+    reason: str = Field(min_length=1, max_length=1_000)
+
+
+# Backward-compatible names used by the first POST-01 implementation.
+RemediationSimulation = SimulationResult
+RemediationProposal = RoutingRecommendation
+
+
 class DiagnosedIncident(BaseModel):
     """One detected incident paired with its RCA and AI narration."""
 
@@ -224,6 +338,7 @@ class DiagnosedIncident(BaseModel):
 
     incident: Incident
     diagnosis: Diagnosis
+    remediation: RoutingRecommendation | None = None
 
 
 class MerchantIncidentsResponse(BaseModel):
@@ -243,6 +358,32 @@ class LiveTickResponse(BaseModel):
     window_start: datetime
     window_end: datetime
     incidents: list[DiagnosedIncident] = Field(default_factory=list)
+
+
+class CountryMonitoringMetric(BaseModel):
+    """Observed and expected approval metrics for one live merchant-country window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    country: Country
+    actual_approval_rate: float = Field(ge=0, le=1)
+    expected_approval_rate: float = Field(ge=0, le=1)
+    attempted_transactions: int = Field(ge=0)
+    approval_history: list[float] = Field(default_factory=list)
+
+
+class MerchantMonitoringResponse(BaseModel):
+    """Live simulator metrics isolated to one merchant context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    merchant: Merchant
+    window_start: datetime
+    window_end: datetime
+    actual_approval_rate: float = Field(ge=0, le=1)
+    expected_approval_rate: float = Field(ge=0, le=1)
+    attempted_transactions: int = Field(ge=0)
+    countries: list[CountryMonitoringMetric] = Field(default_factory=list)
 
 class HealthResponse(BaseModel):
     status: Literal["ok"]
