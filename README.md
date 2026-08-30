@@ -127,8 +127,8 @@ required.
 1. Start in `MOCK_MODE=true` and open the dashboard.
 2. Watch two or three normal windows update. No incident should appear.
 3. Open **Judge Lab** on the right.
-4. Choose a merchant and country plus at most one optional provider, payment
-   method, or issuing bank.
+4. Choose a merchant and country, then select one **Anomaly scope**: all traffic,
+   provider, payment method, or issuing bank.
 5. Use a strong target approval rate (20% is the known-good demo value) and click
    **Inject incident**.
 6. The simulator advances, the detector reacts automatically, and the dashboard
@@ -191,9 +191,12 @@ Supported trial-by-fire injections are statistically observable slices:
 - intersections only when they contain enough traffic (evaluation coverage, not
   the primary Judge Lab promise).
 
-The main Judge Lab prevents selecting multiple optional slice filters at once.
-Ultra-narrow intersections and mild changes can fall below the detector's
-merchant×country minimum-volume/signal policy and are intentionally not promised.
+Both Judge Lab surfaces render only the filter selected by **Anomaly scope**, so
+multiple optional slice filters cannot be submitted accidentally. Ultra-narrow
+intersections and mild changes can fall below the detector's merchant×country
+minimum-volume/signal policy and are intentionally not promised. See
+[`docs/judge_lab_scope_limitations.md`](docs/judge_lab_scope_limitations.md) for
+the exact UI contract, reset behavior, and scope rationale.
 
 ## Known limitations and fallback strategy
 

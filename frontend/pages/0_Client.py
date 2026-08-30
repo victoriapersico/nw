@@ -11,10 +11,11 @@ from typing import Any
 
 import streamlit as st
 
-from backend.schemas import (
-    COUNTRY_ISSUING_BANKS,
-    COUNTRY_PAYMENT_METHODS,
-    InjectionConfig,
+from backend.schemas import InjectionConfig
+from frontend.injection_scope import (
+    clear_scope_state,
+    render_scope_filter,
+    render_scope_selector,
 )
 from frontend.remediation_client import (
     RemediationClientError,
@@ -1085,6 +1086,10 @@ with st.container(key="demo_toolbar"):
 
 live_playback = True
 
+if st.session_state.pop("dashboard_judge_reset_pending", False):
+    clear_scope_state(key_prefix="dashboard_judge")
+    clear_scope_state(key_prefix="judge_lab")
+
 with st.popover("Judge Lab"):
     st.markdown("#### Inject test incident")
     st.caption("Configure a simulated degradation without leaving the dashboard.")
@@ -1096,21 +1101,16 @@ with st.popover("Judge Lab"):
         ["Mexico", "Brazil", "Colombia"],
         key="judge_injection_country",
     )
+    lab_scope = render_scope_selector(key_prefix="dashboard_judge")
     with st.form("judge_injection_form"):
         merchant_names = list(MERCHANT_DATA)
         lab_merchant = st.selectbox(
             "Merchant", merchant_names, index=merchant_names.index(merchant)
         )
-        lab_provider = st.selectbox(
-            "Provider",
-            ["Any", "Stripe", "Adyen", "dLocal"],
-            key="judge_injection_provider_v2",
-        )
-        lab_method = st.selectbox(
-            "Payment method", ["Any", *sorted(COUNTRY_PAYMENT_METHODS[lab_country])]
-        )
-        lab_bank = st.selectbox(
-            "Issuing bank", ["Any", *sorted(COUNTRY_ISSUING_BANKS[lab_country])]
+        lab_slice = render_scope_filter(
+            country=lab_country,
+            scope=lab_scope,
+            key_prefix="dashboard_judge",
         )
         target_rate = st.slider("Target approval rate", 0, 100, 30, 5)
         duration_windows = st.slider(
@@ -1122,16 +1122,16 @@ with st.popover("Judge Lab"):
             help="Each window represents five simulated minutes. 30 windows keep a demo incident visible for about 2.5 real minutes.",
         )
         inject = st.form_submit_button(
-            "Inject incident", type="primary", use_container_width=True
+            "Inject incident", type="primary", width="stretch"
         )
 
     if inject:
         config = InjectionConfig(
             merchant=lab_merchant,
             country=lab_country,
-            provider=None if lab_provider == "Any" else lab_provider,
-            payment_method=None if lab_method == "Any" else lab_method,
-            issuing_bank=None if lab_bank == "Any" else lab_bank,
+            provider=lab_slice.provider,
+            payment_method=lab_slice.payment_method,
+            issuing_bank=lab_slice.issuing_bank,
             target_approval_rate=target_rate / 100,
             duration_windows=duration_windows,
         )
@@ -1198,18 +1198,28 @@ with st.popover("Judge Lab"):
             "The detector only receives the generated transactions, "
             "never this configuration."
         )
-        if st.button("Clear local notice", use_container_width=True):
-            del st.session_state["last_injection"]
-            st.rerun()
-
-    if st.session_state.get("active_injection"):
-        active = st.session_state["active_injection"]
+    active_injection = st.session_state.get("active_injection")
+    if active_injection:
+        active = active_injection
         st.error(
             f"Active: {active['merchant']} / {active['country']} / {active['target_approval_rate']:.0%}"
         )
-        if st.button("Reset incident", use_container_width=True):
-            del st.session_state["active_injection"]
-            st.rerun()
+
+    if last_injection or active_injection:
+        if st.button("Reset demo", width="stretch"):
+            try:
+                response = requests.post(
+                    f"{API_BASE_URL}/monitor/reset",
+                    timeout=30,
+                )
+                response.raise_for_status()
+                st.session_state.pop("last_injection", None)
+                st.session_state.pop("active_injection", None)
+                st.session_state.pop("injection_id", None)
+                st.session_state["dashboard_judge_reset_pending"] = True
+                st.rerun()
+            except requests.RequestException as exc:
+                st.error(f"Backend reset failed: {exc}")
 
 
 data = deepcopy(MERCHANT_DATA[merchant])
