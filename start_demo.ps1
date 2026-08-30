@@ -134,4 +134,5 @@ Write-Host "Telegram is enabled only when its four TELEGRAM_* values are set in 
 
 if (-not $NoBrowser) {
     Start-Process $DashboardUrl
+    Start-Process $YunoDashboardUrl
 }
