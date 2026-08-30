@@ -178,6 +178,21 @@ def select_display_incident(
     return max(incidents, key=lambda item: item["incident"]["detected_at"])
 
 
+def incident_display_signature(incidents: list[dict[str, Any]]) -> tuple[tuple[str, str, str, str, str], ...]:
+    """Capture only UI-relevant incident fields to refresh the outer dashboard."""
+
+    return tuple(
+        (
+            str(item.get("incident", {}).get("incident_id", "")),
+            str(item.get("incident", {}).get("detected_at", "")),
+            str(item.get("diagnosis", {}).get("explanation", "")),
+            str(item.get("diagnosis", {}).get("recommended_action", "")),
+            str((item.get("remediation") or {}).get("status", "")),
+        )
+        for item in incidents
+    )
+
+
 def advance_and_fetch_monitoring(merchant: str) -> dict[str, Any] | None:
     """Advance one real simulator window, then read its merchant-scoped metrics."""
 
@@ -1018,6 +1033,10 @@ theme = MERCHANT_THEMES[merchant]
 hero_class = "merchant-hero rappi-hero" if merchant == "Rappi" else "merchant-hero"
 
 live_incidents = fetch_merchant_incidents(merchant) if live_playback else None
+if live_incidents is not None:
+    st.session_state.setdefault(
+        "displayed_incident_signature", incident_display_signature(live_incidents)
+    )
 
 # When the API is available, it is the source of truth: no synthetic UI
 
@@ -1263,6 +1282,12 @@ def render_live_summary() -> None:
     )
     if active is not None:
         st.session_state["latest_live_incidents"] = active_items
+        active_signature = incident_display_signature(active_items)
+        if st.session_state.get("displayed_incident_signature") != active_signature:
+            st.session_state["displayed_incident_signature"] = active_signature
+            # The root-cause and recommendation panels live outside this
+            # fragment. Rebuild the page only when their source incident changes.
+            st.rerun(scope="app")
     incident_count = len(active_items)
     live_approval = snapshot["actual_approval_rate"] * 100
     expected_approval = snapshot["expected_approval_rate"] * 100
