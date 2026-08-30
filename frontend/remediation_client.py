@@ -52,24 +52,6 @@ def fetch_workflow(base_url: str, recommendation_id: str) -> dict[str, Any]:
     return result
 
 
-def ask_incident_assistant(
-    base_url: str,
-    incident_id: str,
-    merchant: str,
-    question: str,
-) -> dict[str, Any]:
-    """Ask about one merchant-owned incident without sending UI context or secrets."""
-
-    result = _request_json(
-        "POST",
-        base_url,
-        f"/incidents/{incident_id}/assistant",
-        payload={"merchant": merchant, "question": question},
-    )
-    assert isinstance(result, dict)
-    return result
-
-
 def record_decision(
     base_url: str,
     recommendation_id: str,
