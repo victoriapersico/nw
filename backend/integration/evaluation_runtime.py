@@ -13,6 +13,7 @@ from backend.config import settings
 from backend.detector.config import DetectorConfig
 from backend.detector.detector import AnomalyDetector
 from backend.evaluation.scenarios import ScenarioDefinition
+from backend.incidents.engine import IncidentEngine
 from backend.root_cause import RootCauseAnalyzer
 from backend.schemas import (
     DetectionRequest,
@@ -43,6 +44,7 @@ class ControlTowerEvaluationRuntime:
     ) -> None:
         self._baseline = baseline
         self._root_cause_analyzer = root_cause_analyzer
+        self._incident_engine = IncidentEngine()
         self._simulator: LiveTransactionSimulator | None = None
         self._detector: AnomalyDetector | None = None
         self._directives: tuple[str, ...] = ()
@@ -90,7 +92,8 @@ class ControlTowerEvaluationRuntime:
             or self._recent_batches[-1].window_end != request.batch.window_end
         ):
             self._recent_batches.append(request.batch.model_copy(deep=True))
-        return DetectionResponse(incidents=self._require_detector().detect(request.batch))
+        detected = self._require_detector().detect(request.batch)
+        return DetectionResponse(incidents=self._incident_engine.process(detected))
 
     def diagnose(self, incident: Incident) -> Diagnosis:
         if self._root_cause_analyzer is None:

@@ -146,3 +146,45 @@ def test_normal_window_resets_anomaly_persistence() -> None:
     assert first_incidents == []
     assert normal_incidents == []
     assert later_incidents == []
+
+
+def test_sparse_seasonal_baseline_does_not_false_positive_normal_traffic() -> None:
+    """A noisy seasonal bucket must borrow support from its stable parent."""
+
+    training_time = datetime(2025, 1, 6, 9, tzinfo=timezone.utc)
+    parent_time = training_time + timedelta(hours=1)
+    training = [
+        transaction(
+            f"seasonal-{index}",
+            training_time,
+            "approved" if index < 55 else "declined",
+        )
+        for index in range(57)
+    ] + [
+        transaction(
+            f"parent-{index}",
+            parent_time,
+            "approved" if index < 450 else "declined",
+        )
+        for index in range(500)
+    ]
+    anomaly_detector = AnomalyDetector(
+        baseline=SeasonalBaseline(minimum_volume=50).fit(training),
+        config=DetectorConfig(
+            minimum_volume=50,
+            minimum_absolute_drop=0.08,
+            z_score_threshold=-3.0,
+            consecutive_windows=2,
+        ),
+        window_minutes=5,
+    )
+    live_time = datetime(2025, 9, 1, 9, tzinfo=timezone.utc)
+    normal_statuses = ["approved"] * 135 + ["declined"] * 18
+
+    first = anomaly_detector.detect(batch(live_time, normal_statuses))
+    second = anomaly_detector.detect(
+        batch(live_time + timedelta(minutes=5), normal_statuses)
+    )
+
+    assert first == []
+    assert second == []
