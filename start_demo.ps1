@@ -41,8 +41,8 @@ if ($DashboardPort -eq $YunoDashboardPort) {
 
 New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
 
-# python-dotenv does not override process variables, so both child processes
-# receive one shared API URL even if .env contains a different local port.
+# python-dotenv preserves process variables, so both child processes receive
+# this shared API URL even if .env contains a different local port.
 $env:CONTROL_TOWER_API_URL = $ApiUrl
 
 function Test-LocalPortListening {
@@ -130,7 +130,8 @@ Write-Host "  Yuno API Manager: $YunoDashboardUrl"
 Write-Host "  API docs:  $ApiUrl/docs"
 Write-Host "  Logs:      $LogDirectory"
 Write-Host ""
-Write-Host "Telegram is enabled only when its four TELEGRAM_* values are set in .env."
+Write-Host "Telegram is opt-in: enable it in .env and provide bot token + chat ID."
+Write-Host "A public HTTPS dashboard URL is optional and only adds the deep-link button."
 
 if (-not $NoBrowser) {
     Start-Process $DashboardUrl

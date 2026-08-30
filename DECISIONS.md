@@ -1151,12 +1151,13 @@ rejection, simulation, and rollback remain dashboard-only human actions.
 - Keeps the deterministic incident, diagnosis, simulation, approval, audit, and
   rollback happy path reliable for a live demo.
 - Makes the operational boundary explicit: no production routing, payment,
-  email, webhook delivery, or Telegram action is performed.
+  email, webhook delivery, or action triggered from Telegram is performed.
 
 ### Tradeoff
 The API Manager is a local sandbox rather than a live Yuno integration, and
-Telegram delivery depends on local network access and a configured public HTTPS
-dashboard URL.
+Telegram delivery depends on local network access and valid bot/chat
+configuration. Its optional dashboard deep link additionally requires a public
+HTTPS URL.
 
 ### Revisit
 After the hackathon, replace synthetic partner telemetry with an approved Yuno

@@ -8,6 +8,7 @@ __pycache__/
 .coverage
 htmlcov/
 artifacts/
+tmp/
 .streamlit/secrets.toml
 .DS_Store
 hackathon-references/

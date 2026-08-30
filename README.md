@@ -11,6 +11,11 @@ merchant-scoped dashboard.
 The product recommends an action; it never changes routing or remediates payments
 automatically.
 
+The repository also includes two deliberately bounded demo surfaces: a local
+notification inbox with optional read-only Telegram delivery, and a separate
+Yuno API Manager sandbox. Telegram is opt-in and best-effort; the Yuno surface
+uses synthetic local telemetry and contacts neither Yuno nor an email provider.
+
 ## What runs end to end
 
 ```mermaid
@@ -26,6 +31,9 @@ flowchart LR
     N --> A["FastAPI live state"]
     T --> A
     A --> U["Streamlit dashboard"]
+    A --> L["Local notifications inbox"]
+    A -.->|opt-in, best-effort| TG["Telegram incident alert"]
+    A --> Y["Yuno API Manager<br/>local synthetic sandbox"]
 ```
 
 `InjectionConfig` stops at the simulator. The detector, RCA, LLM prompt, and
@@ -50,6 +58,13 @@ Core components:
 - Dashboard: polls the backend and displays only the current real simulator batch,
   backend incidents, RCA, and recommendations. If FastAPI is unavailable, it
   shows an error and no fake live fallback.
+- Notifications: every detected incident creates a local inbox alert. With
+  explicit Telegram configuration, the backend can also send a read-only summary
+  with evidence, estimated impact, and recommendation. Operator decisions remain
+  dashboard-only.
+- Yuno API Manager: a separate Streamlit sandbox demonstrates trusted malformed
+  traffic isolation, local alert/email previews, and invalid-signature rejection
+  without external delivery.
 
 ## Install
 
@@ -79,6 +94,10 @@ OPENAI_TIMEOUT_SECONDS=30
 MOCK_MODE=true
 CONTROL_TOWER_API_URL=http://127.0.0.1:8000
 BACKEND_REQUEST_TIMEOUT_SECONDS=90
+TELEGRAM_NOTIFICATIONS_ENABLED=false
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+TELEGRAM_DASHBOARD_URL=
 ```
 
 `MOCK_MODE=true` is the primary live-demo mode. It uses the real simulator,
@@ -91,6 +110,13 @@ For an intentional OpenAI narration test, set a valid `OPENAI_API_KEY` and
 fallback after an OpenAI request failure is not yet guaranteed.
 
 Never commit `.env`, API keys, tokens, or credentials.
+
+Telegram stays disabled unless `TELEGRAM_NOTIFICATIONS_ENABLED=true` and both
+`TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are configured locally. An optional
+public HTTPS `TELEGRAM_DASHBOARD_URL` adds an **Open Control Tower** button; local
+URLs are intentionally not sent as Telegram deep links. Delivery failures never
+interrupt monitoring. Telegram cannot approve, reject, simulate, or roll back a
+recommendation.
 
 ## Start the product
 
@@ -122,6 +148,26 @@ streamlit run frontend/app.py
 Open <http://127.0.0.1:8501>. No `PYTHONPATH` override or extra command is
 required.
 
+Optional local Yuno API Manager sandbox:
+
+```bash
+source .venv/bin/activate
+streamlit run frontend/yuno_demo.py --server.port 8502
+```
+
+Open <http://127.0.0.1:8502>. This is a synthetic local operations demo, not a
+production Yuno integration.
+
+On Windows PowerShell, the checked-in launcher starts FastAPI, the Control Tower,
+and the Yuno sandbox with the repository virtual environment:
+
+```powershell
+.\start_demo.ps1
+```
+
+Its default endpoints are `8000`, `8501`, and `8502`; optional port parameters
+are supported. Telegram remains controlled exclusively by the local `.env`.
+
 ## Five-minute judge flow
 
 1. Start in `MOCK_MODE=true` and open the dashboard.
@@ -133,10 +179,12 @@ required.
    **Inject incident**.
 6. The simulator advances, the detector reacts automatically, and the dashboard
    shows the incident, impact, diagnosis status, evidence, and recommendation.
-7. For an eligible routing recommendation, click **Approve recommendation** and
+7. Optionally open **Notifications** to show the local incident alert. Keep
+   Telegram off for the primary demo so the happy path has no network dependency.
+8. For an eligible routing recommendation, click **Approve recommendation** and
    then **Simulate application**. Inspect the before/expected/observed metrics and
    audit log, then choose **Revert simulated change** or **Complete review**.
-8. Click **Reset demo** before repeating. This calls `POST /monitor/reset`; it is
+9. Click **Reset demo** before repeating. This calls `POST /monitor/reset`; it is
    not a Streamlit-only reset.
 
 Known-good injection: **Rappi · Brazil · Stripe · target 20% · 6 windows**.
@@ -160,13 +208,13 @@ curl -X POST http://127.0.0.1:8000/monitor/reset
 Run the full test suite:
 
 ```bash
-python -m pytest -q
+MOCK_MODE=true PYTHONPATH=. .venv/bin/pytest -q
 ```
 
 Run all 30 deterministic evaluation scenarios and save both reports:
 
 ```bash
-python -m backend.evaluation --output artifacts/evaluation
+MOCK_MODE=true PYTHONPATH=. .venv/bin/python -m backend.evaluation --output artifacts/evaluation
 ```
 
 Outputs:
@@ -178,6 +226,10 @@ The harness separately reports detection recall, false-positive rate, confirmed
 root-cause accuracy, abstention accuracy, simultaneous-incident separation, and
 mean latency. Estimated-loss error remains explicitly unavailable because the
 catalog has no independent ground-truth loss label.
+
+The Incident assistant client uses a 5-second connection timeout and a 70-second
+read timeout. The suite includes a slow-LLM regression test that confirms the UI
+waits for a valid response beyond the former short timeout.
 
 ## Supported Judge Lab scope
 
@@ -215,6 +267,23 @@ the exact UI contract, reset behavior, and scope rationale.
   history, multi-user isolation, or automatic remediation.
 - If the OpenAI path is unhealthy, restart with `MOCK_MODE=true`. The deterministic
   product pipeline remains fully functional without an API key.
+- Telegram is an optional read-only delivery channel and depends on network and
+  valid local bot configuration; the local Notifications inbox is the reliable
+  fallback and retains all operator actions in the dashboard.
+- The Yuno API Manager is a synthetic local sandbox. It does not claim a live Yuno
+  contract, real partner telemetry, webhook delivery, or email delivery.
+
+## Delivery package
+
+- [`SUBMISSION.md`](SUBMISSION.md): concise final submission, verified results,
+  architecture, setup, and limitations.
+- [`DECISIONS.md`](DECISIONS.md): technical decision log for the defense.
+- [`docs/DEMO_RECORDING_GUIDE.md`](docs/DEMO_RECORDING_GUIDE.md): exact recording,
+  preflight, optional OpenAI/Yuno coverage, and Telegram boundaries.
+- [`.env.example`](.env.example): safe configuration template with empty secret
+  fields and external delivery disabled by default.
+- [`start_demo.ps1`](start_demo.ps1): Windows launcher for the three local demo
+  surfaces.
 
 ## Main API paths
 
