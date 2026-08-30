@@ -16,6 +16,7 @@ from backend.detector.detector import AnomalyDetector
 from backend.evaluation.scenarios import ScenarioDefinition
 from backend.incidents.engine import IncidentEngine
 from backend.root_cause import RootCauseAnalyzer
+from backend.remediation import RemediationSimulator
 from backend.schemas import (
     DetectionRequest,
     DetectionResponse,
@@ -42,9 +43,11 @@ class ControlTowerEvaluationRuntime:
         self,
         baseline: SeasonalBaseline,
         root_cause_analyzer: RootCauseAnalyzer | None = None,
+        remediation_simulator: RemediationSimulator | None = None,
     ) -> None:
         self._baseline = baseline
         self._root_cause_analyzer = root_cause_analyzer
+        self._remediation_simulator = remediation_simulator
         self._incident_engine = IncidentEngine()
         self._simulator: LiveTransactionSimulator | None = None
         self._detector: AnomalyDetector | None = None
@@ -112,6 +115,19 @@ class ControlTowerEvaluationRuntime:
         metric = self._baseline.expected_for(merchant, country, timestamp)
         return metric.approval_rate if metric is not None else None
 
+    def propose_remediation(
+        self, incident: Incident, diagnosis: Diagnosis
+    ):
+        """Evaluate alternatives from known evidence; this never changes routing."""
+
+        if self._remediation_simulator is None:
+            return None
+        return self._remediation_simulator.propose(
+            incident,
+            diagnosis,
+            tuple(self._recent_batches),
+        )
+
     def _require_simulator(self) -> LiveTransactionSimulator:
         if self._simulator is None:
             raise RuntimeError("reset(scenario) must run before using the simulator")
@@ -129,13 +145,14 @@ def build_runtime(
     """Build the default runtime from the reproducible MVP-01 history artifact."""
 
     resolved_path = str(Path(history_path).resolve())
-    baseline, root_cause_analyzer = _load_runtime_components(
+    baseline, root_cause_analyzer, historical_transactions = _load_runtime_components(
         resolved_path,
         settings.baseline_minimum_volume,
     )
     return ControlTowerEvaluationRuntime(
         baseline=baseline,
         root_cause_analyzer=root_cause_analyzer,
+        remediation_simulator=RemediationSimulator(historical_transactions),
     )
 
 
@@ -150,7 +167,7 @@ def _load_baseline(history_path: str, minimum_volume: int) -> SeasonalBaseline:
 def _load_runtime_components(
     history_path: str,
     minimum_volume: int,
-) -> tuple[SeasonalBaseline, RootCauseAnalyzer]:
+) -> tuple[SeasonalBaseline, RootCauseAnalyzer, tuple[Transaction, ...]]:
     path = Path(history_path)
     if not path.exists():
         raise FileNotFoundError(
@@ -186,6 +203,7 @@ def _load_runtime_components(
     return (
         SeasonalBaseline(minimum_volume=minimum_volume).fit(transactions),
         RootCauseAnalyzer(transactions),
+        transactions,
     )
 
 
