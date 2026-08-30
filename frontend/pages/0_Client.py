@@ -1300,7 +1300,15 @@ if live_incidents is not None:
                 "status": remediation["status"],
                 "rationale": remediation["rationale"],
                 "confidence": remediation.get("confidence", 0.0),
-                "traffic_cap": remediation.get("proposed_traffic_cap"),
+                # Older or partially populated recommendations can omit the
+                # top-level cap even when they identify a selected simulation.
+                # The option is the canonical fallback shown to the operator.
+                "traffic_cap": remediation.get("proposed_traffic_cap")
+                or (
+                    selected_simulation["option"].get("traffic_shift_pct")
+                    if selected_simulation is not None
+                    else None
+                ),
                 "abstention_reason": remediation.get("abstention_reason"),
                 "required_approval": remediation["required_approval"],
                 "rollback_reference": remediation.get("rollback_reference"),
@@ -1772,7 +1780,11 @@ else:
             routing = incident.get("routing_recommendation")
             if routing is None:
                 st.info(incident["recommendation"], icon="💡")
-            elif routing["status"] == "recommended":
+            elif (
+                routing["status"] == "recommended"
+                and routing.get("traffic_cap") is not None
+                and routing.get("target_provider")
+            ):
                 st.info(
                     f"Shift {routing['traffic_cap']:.0%} of the affected traffic "
                     f"to {routing['target_provider']}.",
@@ -1789,6 +1801,11 @@ else:
                     "No routing change has occurred"
                 )
                 _render_routing_workflow(routing)
+            elif routing["status"] == "recommended":
+                st.warning(
+                    "The recommendation is incomplete. Refresh the simulation before approval."
+                )
+                st.caption(routing["rationale"])
             else:
                 st.warning("No routing change recommended. Continue monitoring.")
                 st.caption(
