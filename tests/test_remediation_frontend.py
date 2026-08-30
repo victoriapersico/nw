@@ -7,6 +7,7 @@ from streamlit.testing.v1 import AppTest
 from frontend.remediation_client import (
     RemediationClientError,
     apply_simulated_change,
+    ask_incident_assistant,
     complete_simulated_change,
     fetch_audit,
     fetch_simulated_change,
@@ -302,6 +303,49 @@ def test_remediation_client_uses_the_safe_workflow_endpoints() -> None:
     )
     assert calls[1].kwargs["json"]["idempotency_key"] == "change-apply-1"
     assert calls[-1].kwargs["params"] == {"recommendation_id": "rec-1"}
+    assert all(call.kwargs["timeout"] == 5 for call in calls)
+
+
+def test_incident_assistant_waits_for_a_slow_llm_response() -> None:
+    captured: dict[str, object] = {}
+    response = Mock(ok=True)
+    response.json.return_value = {
+        "answer": "The decline spike is isolated to the selected provider.",
+        "evidence": [],
+        "mode": "openai",
+    }
+
+    def delayed_response(
+        _method: str,
+        _url: str,
+        *,
+        json: dict[str, str],
+        params: dict[str, str] | None,
+        timeout: float | tuple[float, float],
+    ) -> Mock:
+        captured.update(json=json, params=params, timeout=timeout)
+        read_timeout = timeout[1] if isinstance(timeout, tuple) else timeout
+        if read_timeout <= 15:
+            raise requests.ReadTimeout("The LLM response exceeded the UI timeout.")
+        return response
+
+    with patch(
+        "frontend.remediation_client.requests.request",
+        side_effect=delayed_response,
+    ):
+        result = ask_incident_assistant(
+            "http://api.test",
+            "inc-1",
+            "Rappi",
+            "What is the root cause?",
+        )
+
+    assert result["mode"] == "openai"
+    assert captured["json"] == {
+        "merchant": "Rappi",
+        "question": "What is the root cause?",
+    }
+    assert captured["timeout"] == (5.0, 70.0)
 
 
 def test_fetch_simulated_change_surfaces_an_offline_backend() -> None:
