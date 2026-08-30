@@ -27,7 +27,7 @@ from frontend.injection_scope import (
 from frontend.incident_assistant_ui import render_incident_assistant
 from frontend.remediation_ui import render_remediation_panel
 
-load_dotenv(override=True)
+load_dotenv()
 
 API_BASE_URL = os.getenv(
     "CONTROL_TOWER_API_URL",
@@ -1271,11 +1271,21 @@ def render_live_summary() -> None:
             st.session_state["monitoring_snapshot"] = snapshot
 
     if snapshot is None:
+        detail = st.session_state.get("live_api_error")
         st.info(
             "Monitoring is reconnecting.",
             icon=":material/sync:",
         )
-        st.caption("Live metrics will appear automatically when the local service is available.")
+        st.caption(
+            "Start FastAPI or verify CONTROL_TOWER_API_URL. Live metrics will "
+            "appear automatically when the local service is available."
+        )
+        if detail:
+            with st.expander(
+                "Connection details",
+                icon=":material/troubleshoot:",
+            ):
+                st.caption(str(detail))
         return
 
     active = fetch_merchant_incidents(merchant)

@@ -9,6 +9,13 @@ from uuid import uuid4
 import requests
 
 
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 5.0
+_INCIDENT_ASSISTANT_TIMEOUT_SECONDS = (
+    _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    70.0,
+)
+
+
 class RemediationClientError(RuntimeError):
     """Raised when the local remediation API rejects or cannot serve a request."""
 
@@ -20,7 +27,7 @@ def _request_json(
     *,
     payload: dict[str, Any] | None = None,
     params: dict[str, str] | None = None,
-    timeout_seconds: int = 5,
+    timeout: float | tuple[float, float] = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
 ) -> dict[str, Any] | list[dict[str, Any]]:
     try:
         response = requests.request(
@@ -28,7 +35,7 @@ def _request_json(
             f"{base_url}{path}",
             json=payload,
             params=params,
-            timeout=timeout_seconds,
+            timeout=timeout,
         )
     except requests.RequestException as exc:
         raise RemediationClientError(
@@ -66,9 +73,7 @@ def ask_incident_assistant(
         base_url,
         f"/incidents/{incident_id}/assistant",
         payload={"merchant": merchant, "question": question},
-        # The evidence-backed LLM call can exceed the short timeout used by
-        # ordinary dashboard actions. Keep this local to the assistant.
-        timeout_seconds=45,
+        timeout=_INCIDENT_ASSISTANT_TIMEOUT_SECONDS,
     )
     assert isinstance(result, dict)
     return result
