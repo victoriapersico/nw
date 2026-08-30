@@ -1,52 +1,59 @@
-# NextWave AI Hackathon Practice Starter
+# The Control Tower
 
-A deliberately small practice kit for turning an unknown challenge into a working AI demo in a few hours. It provides one clean happy path: Streamlit collects input, FastAPI validates it, an OpenAI-powered decision layer calls plain Python tools, and the UI renders a structured Pydantic result.
+NextWave Hackathon 2026 · Challenge 2
 
-It is generic by design. The sample records and decision rules are placeholders, not a solution to the unrevealed challenge.
+The Control Tower is a live payment-operations demo for Rappi, Carrefour, and
+Despegar across Mexico, Brazil, and Colombia. It converts simulated payment
+attempts into interpretable incidents: seasonal anomaly detection, monetary
+impact, deterministic root-cause analysis (RCA), evidence-bound narration, and a
+merchant-scoped dashboard.
 
-## Architecture
+The product recommends an action; it never changes routing or remediates payments
+automatically.
+
+## What runs end to end
 
 ```mermaid
 flowchart LR
-    U["User / challenge data"] --> F["Streamlit frontend"]
-    F -->|"POST /analyze"| B["FastAPI backend"]
-    B --> A["Agent / decision logic"]
-    A --> T["Plain Python tools"]
+    H["2025 normal history"] --> B["Seasonal baseline"]
+    J["Judge Lab InjectionConfig"] --> S["Live simulator"]
+    S --> T["TransactionBatch"]
+    B --> D["Anomaly detector"]
+    T --> D
+    D --> I["IncidentEngine: separate + prioritize"]
+    I --> R["Deterministic RCA"]
+    R --> N["Mock or OpenAI narration"]
+    N --> A["FastAPI live state"]
     T --> A
-    A --> S["Pydantic structured result"]
-    S --> F
-    M["Mock mode when no API key"] -.-> A
+    A --> U["Streamlit dashboard"]
 ```
 
-No database, authentication, Docker, orchestration framework, or external service is required.
+`InjectionConfig` stops at the simulator. The detector, RCA, LLM prompt, and
+evaluation observations receive generated transactions or calculated evidence,
+never the judge's answer.
 
-## Project structure
+Core components:
 
-```text
-.
-├── backend/
-│   ├── __init__.py
-│   ├── agent.py       # OpenAI tool loop + deterministic mock flow
-│   ├── config.py      # Environment settings and mock-mode selection
-│   ├── main.py        # FastAPI /health and /analyze routes
-│   ├── schemas.py     # Pydantic API contracts
-│   └── tools.py       # Three replaceable sample tools
-├── frontend/
-│   └── app.py         # Streamlit demo UI
-├── data/
-│   └── sample_data.csv
-├── tests/
-│   └── test_health.py
-├── .env.example
-├── .gitignore
-├── pytest.ini         # Limits test discovery to this starter's tests
-├── requirements.txt
-└── README.md
-```
+- Historical data: the committed
+  `data/historical_transactions_2025_seed42.csv` is deterministic normal traffic.
+  January–April trains the runtime baseline; later months remain validation/test
+  data.
+- Live simulator: seeded five-minute windows, aligned with the same volume,
+  approval, provider, method, and bank behavior used by history.
+- Baseline and detector: a smoothed seasonal merchant×country expectation,
+  minimum-volume guard, absolute/statistical drop thresholds, and two-window
+  persistence.
+- Incident handling: independent incidents stay separate and are ordered by
+  severity, estimated loss, anomaly score, then conversion drop.
+- RCA: deterministic slice comparisons return either `confirmed` dimensions or
+  `insufficient_evidence`. The LLM cannot change those facts.
+- Dashboard: polls the backend and displays only the current real simulator batch,
+  backend incidents, RCA, and recommendations. If FastAPI is unavailable, it
+  shows an error and no fake live fallback.
 
-## Install on macOS
+## Install
 
-Run from this repository root:
+Run from the repository root with Python 3.11+:
 
 ```bash
 python3 -m venv .venv
@@ -56,74 +63,163 @@ python -m pip install -r requirements.txt
 cp .env.example .env
 ```
 
-## Configure OpenAI or use mock mode
+On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1`.
 
-The copied `.env` works immediately without an API key. With `OPENAI_API_KEY` blank, the backend automatically uses mock mode and still runs all three Python functions locally.
+The committed historical CSV is sufficient to start; no data-generation step is
+required.
 
-To use OpenAI, edit `.env`:
+## Configuration and safe demo mode
+
+`.env.example` is ready for deterministic mock narration:
 
 ```dotenv
-OPENAI_API_KEY=your_key_here
+OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5-mini
-MOCK_MODE=false
+OPENAI_TIMEOUT_SECONDS=30
+MOCK_MODE=true
+CONTROL_TOWER_API_URL=http://127.0.0.1:8000
+BACKEND_REQUEST_TIMEOUT_SECONDS=90
 ```
 
-Never commit `.env`; it is ignored by Git. Set `MOCK_MODE=true` whenever you want deterministic, zero-credit testing even if a key is present.
+`MOCK_MODE=true` is the primary live-demo mode. It uses the real simulator,
+detector, money calculation, IncidentEngine, and RCA; only the final wording is
+local and deterministic. This avoids making the judge demo depend on Wi-Fi or an
+external API.
 
-The OpenAI path follows the Responses API patterns for [function calling](https://developers.openai.com/api/docs/guides/function-calling) and [Pydantic structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
+For an intentional OpenAI narration test, set a valid `OPENAI_API_KEY` and
+`MOCK_MODE=false`. Do not use that as the primary presentation mode: automatic
+fallback after an OpenAI request failure is not yet guaranteed.
 
-## Run the demo
+Never commit `.env`, API keys, tokens, or credentials.
 
-Start FastAPI in terminal 1:
+## Start the product
+
+Use two terminals, both at the repository root.
+
+Terminal 1 — backend:
 
 ```bash
 source .venv/bin/activate
 uvicorn backend.main:app --reload --port 8000
 ```
 
-FastAPI docs are available at <http://localhost:8000/docs>. Verify health with:
+Verify it:
 
 ```bash
-curl http://localhost:8000/health
+curl http://127.0.0.1:8000/health
 ```
 
-Start Streamlit in terminal 2:
+Expected response: `{"status":"ok"}`. API docs are at
+<http://127.0.0.1:8000/docs>.
+
+Terminal 2 — dashboard:
 
 ```bash
 source .venv/bin/activate
 streamlit run frontend/app.py
 ```
 
-Open <http://localhost:8501>, keep the default `REC-001`, and click **Analyze**. Try `REC-002` and `REC-003` to see different deterministic outcomes.
+Open <http://127.0.0.1:8501>. No `PYTHONPATH` override or extra command is
+required.
 
-Run the test suite from terminal 3 (or after stopping a server):
+## Five-minute judge flow
+
+1. Start in `MOCK_MODE=true` and open the dashboard.
+2. Watch two or three normal windows update. No incident should appear.
+3. Open **Judge Lab** on the right.
+4. Choose a merchant and country plus at most one optional provider, payment
+   method, or issuing bank.
+5. Use a strong target approval rate (20% is the known-good demo value) and click
+   **Inject incident**.
+6. The simulator advances, the detector reacts automatically, and the dashboard
+   shows the incident, impact, diagnosis status, evidence, and recommendation.
+7. Click **Reset demo** before repeating. This calls `POST /monitor/reset`; it is
+   not a Streamlit-only reset.
+
+Known-good injection: **Rappi · Brazil · Stripe · target 20% · 6 windows**.
+
+The same injection can be submitted directly for diagnostics:
 
 ```bash
-source .venv/bin/activate
-pytest
+curl -X POST http://127.0.0.1:8000/injections \
+  -H 'Content-Type: application/json' \
+  -d '{"config":{"merchant":"Rappi","country":"Brazil","provider":"Stripe","target_approval_rate":0.2,"duration_windows":6}}'
 ```
 
-## Change these files after the challenge reveal
+Reset directly with:
 
-Search for `CHANGE THIS AFTER CHALLENGE REVEAL`, then focus on only these files:
+```bash
+curl -X POST http://127.0.0.1:8000/monitor/reset
+```
 
-1. `backend/schemas.py` — shape the challenge input and structured result.
-2. `backend/tools.py` — replace sample data access and implement 2–4 useful tools.
-3. `backend/agent.py` — replace the instructions and update the mock happy path.
-4. `frontend/app.py` — capture the real input and present the most convincing result.
-5. `data/sample_data.csv` — replace or supplement the placeholder data if needed.
+## Tests and evaluation
 
-`backend/main.py` and `backend/config.py` should usually remain unchanged.
+Run the full test suite:
 
-## Hackathon adaptation checklist
+```bash
+python -m pytest -q
+```
 
-- [ ] Write the business decision in one sentence.
-- [ ] Define the smallest useful input and output schemas.
-- [ ] Implement only 2–4 tools required for the strongest happy path.
-- [ ] Replace the generic agent instructions and mock rules.
-- [ ] Load one realistic challenge example.
-- [ ] Make one end-to-end case excellent before adding edge cases.
-- [ ] Test `/health`, `/analyze`, error states, and the Streamlit result card.
-- [ ] Keep mock mode ready in case API access or Wi-Fi fails during the demo.
-- [ ] Re-scan staged files for secrets before committing.
-- [ ] Rehearse the demo with a short backup script and known-good input.
+Run all 30 deterministic evaluation scenarios and save both reports:
+
+```bash
+python -m backend.evaluation --output artifacts/evaluation
+```
+
+Outputs:
+
+- `artifacts/evaluation/evaluation_results.json`
+- `artifacts/evaluation/evaluation_summary.md`
+
+The harness separately reports detection recall, false-positive rate, confirmed
+root-cause accuracy, abstention accuracy, simultaneous-incident separation, and
+mean latency. Estimated-loss error remains explicitly unavailable because the
+catalog has no independent ground-truth loss label.
+
+## Supported Judge Lab scope
+
+Supported trial-by-fire injections are statistically observable slices:
+
+- merchant + country;
+- merchant + country + one provider;
+- merchant + country + one payment method;
+- merchant + country + one issuing bank;
+- decline-code degradation when enough declines are present;
+- intersections only when they contain enough traffic (evaluation coverage, not
+  the primary Judge Lab promise).
+
+The main Judge Lab prevents selecting multiple optional slice filters at once.
+Ultra-narrow intersections and mild changes can fall below the detector's
+merchant×country minimum-volume/signal policy and are intentionally not promised.
+
+## Known limitations and fallback strategy
+
+- Detection happens at merchant×country level. Three narrow intersection cases
+  and the random narrow catalog case currently fall below detection support.
+- A mild second incident in evaluation scenario 25 is statistically too small;
+  strong simultaneous scenarios 22–24 are the supported acceptance cases.
+- Deterministic RCA abstains when one cause cannot be isolated. The UI preserves
+  that result and labels candidate evidence as unconfirmed.
+- Active incidents do not auto-resolve after recovery; use **Reset demo** between
+  rehearsals.
+- Money impact is a non-negative estimate of excess expected approvals multiplied
+  by observed average approved amount and scaled per hour. There is no independent
+  loss ground truth, so no loss-error accuracy is claimed.
+- Runtime state is in memory: no database, authentication, durable incident
+  history, multi-user isolation, or automatic remediation.
+- If the OpenAI path is unhealthy, restart with `MOCK_MODE=true`. The deterministic
+  product pipeline remains fully functional without an API key.
+
+## Main API paths
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Backend readiness |
+| `POST` | `/monitor/tick` | Advance one real simulated window |
+| `GET` | `/monitor/latest-batch` | Latest transactions used by dashboard KPIs |
+| `POST` | `/monitor/reset` | Clean simulator/detector/RCA/live lifecycle |
+| `POST` | `/injections` | Activate a judge-controlled simulator change |
+| `GET` | `/merchants/{merchant}/incidents` | Merchant-scoped diagnosed incidents in backend priority order |
+
+The legacy `/analyze` starter route remains for compatibility; it is not the
+Control Tower demo path.

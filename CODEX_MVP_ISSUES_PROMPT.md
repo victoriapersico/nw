@@ -1,3 +1,4 @@
+
 You are acting as Technical Product Manager + Lead Engineer inside our existing Git repository `nw`.
 
 IMPORTANT REPOSITORY RULES

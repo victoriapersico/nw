@@ -142,3 +142,41 @@ def test_runtime_safely_falls_back_to_one_available_window() -> None:
     runtime.diagnose(runtime_incident(only_batch))
 
     assert analyzer.recent_batches == (only_batch,)
+
+
+class UnorderedIncidentDetector:
+    def __init__(self, incidents: list[Incident]) -> None:
+        self._incidents = incidents
+
+    def detect(self, _batch: TransactionBatch) -> list[Incident]:
+        return self._incidents
+
+
+def test_runtime_processes_detector_output_through_incident_engine() -> None:
+    runtime = ControlTowerEvaluationRuntime(SeasonalBaseline(minimum_volume=1))
+    runtime.reset(SCENARIOS[0])
+    batch = live_batch(SCENARIOS[0].start_at, 1)
+    high_loss = runtime_incident(batch).model_copy(
+        update={
+            "incident_id": "inc-high-loss",
+            "severity": "high",
+            "estimated_loss": 10_000.0,
+        }
+    )
+    critical = runtime_incident(batch).model_copy(
+        update={
+            "incident_id": "inc-critical",
+            "merchant": "Carrefour",
+            "country": "Mexico",
+            "severity": "critical",
+            "estimated_loss": 1_000.0,
+        }
+    )
+    runtime._detector = UnorderedIncidentDetector([high_loss, critical])
+
+    response = runtime.detect(DetectionRequest(batch=batch))
+
+    assert [incident.incident_id for incident in response.incidents] == [
+        "inc-critical",
+        "inc-high-loss",
+    ]

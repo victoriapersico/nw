@@ -10,15 +10,21 @@ from backend.agent import AgentError, analyze as run_analysis
 from backend.email_mock import MockEmailMessage, MockEmailOutbox
 from backend.live_control_tower import LiveControlTower, build_live_control_tower
 from backend.schemas import (
+    ApprovalDecision,
     AnalysisRequest,
     AnalysisResponse,
     CreateInjectionRequest,
     CreateInjectionResponse,
+    ExecutionRequest,
+    ExecutionResult,
     HealthResponse,
     LiveTickResponse,
     Merchant,
     MerchantMonitoringResponse,
     MerchantIncidentsResponse,
+    RoutingRecommendation,
+    SimulationRequest,
+    TransactionBatch,
 )
 from backend.tools import RecordNotFoundError
 from backend.yuno_mock import (
@@ -217,6 +223,33 @@ def advance_monitoring() -> LiveTickResponse:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@app.post("/monitor/reset", response_model=HealthResponse)
+def reset_monitoring() -> HealthResponse:
+    """Restore the deterministic live demo to its clean initial state."""
+
+    try:
+        get_control_tower().reset()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return HealthResponse(status="ok")
+
+
+@app.get("/monitor/latest-batch", response_model=TransactionBatch)
+def latest_monitoring_batch() -> TransactionBatch:
+    """Expose the most recent simulator batch for real dashboard metrics."""
+
+    try:
+        batch = get_control_tower().latest_batch()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if batch is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No monitoring batch is available; advance the monitor first.",
+        )
+    return batch
+
+
 @app.get(
     "/merchants/{merchant}/incidents",
     response_model=MerchantIncidentsResponse,
@@ -228,6 +261,37 @@ def merchant_incidents(merchant: Merchant) -> MerchantIncidentsResponse:
         return get_control_tower().incidents_for(merchant)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/remediation/simulations", response_model=RoutingRecommendation)
+def simulate_remediation(request: SimulationRequest) -> RoutingRecommendation:
+    """Return a new dry-run recommendation for an existing active incident."""
+
+    try:
+        return get_control_tower().simulate_remediation(request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown incident: {exc.args[0]}") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/remediation/approvals", response_model=ApprovalDecision)
+def record_remediation_approval(decision: ApprovalDecision) -> ApprovalDecision:
+    """Record a human approval or rejection; it never executes routing."""
+
+    try:
+        return get_control_tower().record_approval(decision)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown recommendation: {exc.args[0]}"
+        ) from exc
+
+
+@app.post("/remediation/executions", response_model=ExecutionResult)
+def request_remediation_execution(request: ExecutionRequest) -> ExecutionResult:
+    """Safe contract endpoint: only dry-runs are possible in POST-01."""
+
+    return get_control_tower().request_execution(request)
 
 
 @app.get(
@@ -253,3 +317,5 @@ def analyze(request: AnalysisRequest) -> AnalysisResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except AgentError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    ExecutionRequest,
+    ExecutionResult,
