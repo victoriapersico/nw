@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from backend.baseline.seasonal import SeasonalBaseline
 from backend.schemas import Transaction
 
@@ -66,5 +68,9 @@ def test_baseline_keeps_hour_of_week_buckets_separate() -> None:
     assert morning_metric is not None
     assert afternoon_metric is not None
     assert morning_metric.hour_of_week != afternoon_metric.hour_of_week
-    assert morning_metric.approval_rate == 1.0
-    assert afternoon_metric.approval_rate == 0.5
+    assert morning_metric.approval_rate == pytest.approx(
+        (2 + 50 * 0.75) / 52
+    )
+    assert afternoon_metric.approval_rate == pytest.approx(
+        (1 + 50 * 0.75) / 52
+    )

@@ -100,6 +100,19 @@ class StripeIncidentRuntime(QuietRuntime):
         )
 
 
+class AbstainingStripeIncidentRuntime(StripeIncidentRuntime):
+    def diagnose(self, incident: Incident) -> Diagnosis:
+        diagnosis = super().diagnose(incident)
+        return diagnosis.model_copy(
+            update={
+                "root_cause_dimensions": [],
+                "confidence": 0.40,
+                "diagnosis_status": "insufficient_evidence",
+                "explanation": "The evidence is not conclusive.",
+            }
+        )
+
+
 def test_catalog_has_exactly_the_required_deterministic_scenarios() -> None:
     assert [scenario.scenario_id for scenario in SCENARIOS] == list(range(1, 31))
     assert len({scenario.seed for scenario in SCENARIOS}) == 30
@@ -135,7 +148,16 @@ def test_harness_evaluates_observed_cause_from_diagnosis_evidence() -> None:
     assert result.passed
     assert result.incident_count == 1
     assert report.metrics["detection_recall"] == 1.0
-    assert report.metrics["root_cause_accuracy"] == 1.0
+    assert report.metrics["confirmed_root_cause_accuracy"] == 1.0
+
+
+def test_abstained_evidence_does_not_count_as_confirmed_root_cause() -> None:
+    report = EvaluationHarness(AbstainingStripeIncidentRuntime()).run([SCENARIOS[6]])
+
+    result = report.results[0]
+    assert not result.passed
+    assert "missing confirmed expected cause provider=Stripe" in result.mismatches
+    assert report.metrics["confirmed_root_cause_accuracy"] == 0.0
 
 
 def test_low_volume_abstention_passes_without_a_created_incident() -> None:

@@ -1,9 +1,9 @@
 """Incident separation, exact-duplicate removal, and prioritization."""
 
 from backend.incidents.priorization import (
-      incident_priority_key,
-      prioritize_incidents,
-  )
+    incident_priority_key,
+    prioritize_incidents,
+)
 from backend.schemas import Incident
 
 

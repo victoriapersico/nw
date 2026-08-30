@@ -15,6 +15,7 @@ from backend.schemas import (
     LiveTickResponse,
     Merchant,
     MerchantIncidentsResponse,
+    TransactionBatch,
 )
 from backend.tools import RecordNotFoundError
 
@@ -63,6 +64,33 @@ def advance_monitoring() -> LiveTickResponse:
         return get_control_tower().tick()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/monitor/reset", response_model=HealthResponse)
+def reset_monitoring() -> HealthResponse:
+    """Restore the deterministic live demo to its clean initial state."""
+
+    try:
+        get_control_tower().reset()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return HealthResponse(status="ok")
+
+
+@app.get("/monitor/latest-batch", response_model=TransactionBatch)
+def latest_monitoring_batch() -> TransactionBatch:
+    """Expose the most recent simulator batch for real dashboard metrics."""
+
+    try:
+        batch = get_control_tower().latest_batch()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if batch is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No monitoring batch is available; advance the monitor first.",
+        )
+    return batch
 
 
 @app.get(
