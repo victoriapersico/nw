@@ -603,6 +603,7 @@ if live_incidents is not None:
         raw_incident = primary["incident"]
         diagnosis = primary["diagnosis"]
         evidence = diagnosis["evidence"]
+        remediation = primary.get("remediation")
 
         country_state = data["countries"][raw_incident["country"]]
         country_state["approval"] = raw_incident["actual_conversion"] * 100
@@ -641,6 +642,36 @@ if live_incidents is not None:
             or "general payment traffic"
         )
 
+        routing_recommendation = None
+        if remediation is not None:
+            selected_simulation = next(
+                (
+                    item
+                    for item in remediation["alternatives"]
+                    if item["option"]["option_id"]
+                    == remediation["recommended_option_id"]
+                ),
+                None,
+            )
+            routing_recommendation = {
+                "status": remediation["status"],
+                "rationale": remediation["rationale"],
+                "confidence": remediation.get("confidence", 0.0),
+                "traffic_cap": remediation.get("proposed_traffic_cap"),
+                "abstention_reason": remediation.get("abstention_reason"),
+                "required_approval": remediation["required_approval"],
+                "target_provider": (
+                    selected_simulation["option"]["target_provider"]
+                    if selected_simulation is not None
+                    else None
+                ),
+                "expected_recovery_per_hour": (
+                    selected_simulation["expected_recovered_value_per_hour"]
+                    if selected_simulation is not None
+                    else 0.0
+                ),
+            }
+
         data["incident"] = {
             "severity": raw_incident["severity"].title(),
             "country": raw_incident["country"],
@@ -658,6 +689,7 @@ if live_incidents is not None:
             ],
             "recommendation": diagnosis["recommended_action"],
             "confidence": diagnosis["confidence"],
+            "routing_recommendation": routing_recommendation,
         }
 
 countries = data["countries"]
@@ -1020,6 +1052,29 @@ else:
     with action_column:
         with st.container(border=True):
             st.markdown("#### Recommended action")
-            st.info(incident["recommendation"], icon="💡")
+            routing = incident.get("routing_recommendation")
+            if routing is None:
+                st.info(incident["recommendation"], icon="💡")
+            elif routing["status"] == "recommended":
+                st.info(
+                    f"Shift {routing['traffic_cap']:.0%} of the affected traffic "
+                    f"to {routing['target_provider']}.",
+                    icon="💡",
+                )
+                st.caption(
+                    f"Estimated recovery: US$ "
+                    f"{routing['expected_recovery_per_hour']:,.0f}/h · "
+                    f"Confidence: {routing['confidence']:.0%}"
+                )
+                st.write(routing["rationale"])
+                st.caption(
+                    "Recommendation only · Human approval required · "
+                    "No routing change has occurred"
+                )
+            else:
+                st.warning("No routing change recommended. Continue monitoring.")
+                st.caption(
+                    routing["abstention_reason"] or routing["rationale"]
+                )
 
 st.caption("Control Tower MVP — Simulated data for validating the demo flow")

@@ -282,6 +282,9 @@ class RoutingRecommendation(BaseModel):
     recommended_option_id: str | None = Field(default=None, max_length=128)
     alternatives: list[SimulationResult] = Field(default_factory=list)
     rationale: str = Field(min_length=1, max_length=1_000)
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    proposed_traffic_cap: float | None = Field(default=None, gt=0, le=1)
+    abstention_reason: str | None = Field(default=None, max_length=1_000)
     rollback_condition: str | None = Field(default=None, max_length=1_000)
     rollback_reference: str | None = Field(default=None, max_length=128)
     required_approval: Literal["merchant_operations"] = "merchant_operations"

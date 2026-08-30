@@ -104,13 +104,15 @@ class RemediationSimulator:
 
         eligible = [item for item in alternatives if item.status == "eligible"]
         if not eligible:
+            rationale = "No eligible alternative has enough healthy historical evidence."
             return RemediationProposal(
                 recommendation_id=f"rec-{incident.incident_id}",
                 incident_id=incident.incident_id,
                 policy_id=policy.policy_id,
                 status="not_recommended",
                 alternatives=alternatives,
-                rationale="No eligible alternative has enough healthy historical evidence.",
+                rationale=rationale,
+                abstention_reason=rationale,
             )
 
         best = max(
@@ -132,12 +134,22 @@ class RemediationSimulator:
                 f"{best.option.target_provider} has the strongest eligible historical "
                 "approval estimate after confidence adjustment."
             ),
+            confidence=best.confidence,
+            proposed_traffic_cap=best.option.traffic_shift_pct,
             rollback_condition=(
                 "Do not execute automatically. If approved, roll back the temporary "
                 "change when target-route approval falls below 80% for two consecutive "
                 "five-minute windows."
             ),
             rollback_reference=f"rollback-{incident.incident_id}",
+        )
+
+    def policy_by_id(self, policy_id: str) -> RoutingPolicy | None:
+        """Expose one immutable typed policy to the recommendation boundary."""
+
+        return next(
+            (policy for policy in self._policies if policy.policy_id == policy_id),
+            None,
         )
 
     def _policy_for(
@@ -250,6 +262,7 @@ class RemediationSimulator:
             status="not_recommended",
             alternatives=[],
             rationale=rationale,
+            abstention_reason=rationale,
         )
 
 
