@@ -555,6 +555,7 @@ siguen funcionando.
 
 ## Referencias del repositorio
 
+- [Presentación final](../deliverables/Control_Tower_Final_Deck.pptx)
 - [README y operación completa](../README.md)
 - [Submission package](../SUBMISSION.md)
 - [Decision log](../DECISIONS.md)

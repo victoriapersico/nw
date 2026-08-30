@@ -275,6 +275,9 @@ the exact UI contract, reset behavior, and scope rationale.
 
 ## Delivery package
 
+- [`deliverables/Control_Tower_Final_Deck.pptx`](deliverables/Control_Tower_Final_Deck.pptx):
+  final 10-slide presentation with the problem, architecture, trial-by-fire,
+  evaluation, Telegram boundary, Yuno sandbox, and technical defense.
 - [`SUBMISSION.md`](SUBMISSION.md): concise final submission, verified results,
   architecture, setup, and limitations.
 - [`DECISIONS.md`](DECISIONS.md): technical decision log for the defense.

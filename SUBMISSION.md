@@ -218,6 +218,7 @@ The full decision log is available in [`DECISIONS.md`](DECISIONS.md).
 
 ## 10. Technical links
 
+- [Final presentation deck](deliverables/Control_Tower_Final_Deck.pptx)
 - [README and complete operating guide](README.md)
 - [Architecture and technical decision log](DECISIONS.md)
 - [Judge Lab scope and limitations](docs/judge_lab_scope_limitations.md)
@@ -226,3 +227,20 @@ The full decision log is available in [`DECISIONS.md`](DECISIONS.md).
 - [Demo recording and preflight guide](docs/DEMO_RECORDING_GUIDE.md)
 - [Safe environment template](.env.example)
 - [Windows demo launcher](start_demo.ps1)
+
+## 11. Official deliverables checklist
+
+The official challenge brief requests the same five deliverables for every team:
+
+| Required deliverable | Control Tower package |
+|---|---|
+| Presentation (PPT/Slides) | [`deliverables/Control_Tower_Final_Deck.pptx`](deliverables/Control_Tower_Final_Deck.pptx) |
+| Demo (live or video) | Live demo is reproducible from section 5; [`docs/DEMO_RECORDING_GUIDE.md`](docs/DEMO_RECORDING_GUIDE.md) defines the optional recording package. |
+| Public GitHub repository with README | [github.com/victoriapersico/nw](https://github.com/victoriapersico/nw) and [`README.md`](README.md) |
+| Architecture diagram | Rendered Mermaid diagrams in [`README.md`](README.md) and this submission |
+| Decision log | [`DECISIONS.md`](DECISIONS.md), with DEC-001 through DEC-044 |
+
+No video file is committed to the repository. The brief allows a live demo; if
+the event portal separately requires an upload, record and submit it using the
+guide above without exposing `.env`, tokens, API keys, logs, or private
+notifications.
