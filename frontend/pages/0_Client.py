@@ -8,12 +8,17 @@ from typing import Any
 
 import streamlit as st
 
-from backend.schemas import COUNTRY_ISSUING_BANKS, COUNTRY_PAYMENT_METHODS, InjectionConfig
+from backend.schemas import (
+    COUNTRY_ISSUING_BANKS,
+    COUNTRY_PAYMENT_METHODS,
+    InjectionConfig,
+)
 
 API_BASE_URL = os.getenv(
     "CONTROL_TOWER_API_URL",
     "http://127.0.0.1:8000",
 )
+
 
 def fetch_merchant_incidents(
     merchant: str,
@@ -57,7 +62,6 @@ def render_approval_chart(
         for tick in (60, 70, 80, 90, 100)
     )
     lines: list[str] = []
-    legend: list[str] = []
     for color, (country, approvals) in zip(colors, trends.items()):
         points = " ".join(
             f"{x:.1f},{y:.1f}"
@@ -82,10 +86,6 @@ def render_approval_chart(
                 f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius}" fill="{marker}" '
                 'stroke="white" stroke-width="1.5" />'
             )
-        legend.append(
-            f'<span><i style="background:{color}"></i>{country} '
-            f'({approvals[-1]:.1f}% / expected {expected:.1f}%)</span>'
-        )
 
     chart = f"""
     <div class="approval-chart">
@@ -93,7 +93,6 @@ def render_approval_chart(
             {grid}{''.join(lines)}
             <text x="{width / 2 - 36:.1f}" y="{height - 10}" fill="#68758c" font-size="11">Latest windows</text>
         </svg>
-        <div class="approval-legend">{''.join(legend)}</div>
     </div>
     """
     st.markdown(chart, unsafe_allow_html=True)
@@ -104,15 +103,34 @@ def render_approval_chart_legacy(*_args: Any, **_kwargs: Any) -> None:
 
     render_approval_chart(data["trend"], countries, theme)
 
+
 # Contract-shaped mocks until the live backend is integrated. Each merchant owns
 # a separate payload so switching companies can never mix their information.
 MERCHANT_DATA: dict[str, dict[str, Any]] = {
     "Rappi": {
         "updated": "18 seconds ago",
         "countries": {
-            "Mexico": {"approval": 91.8, "expected": 92.4, "transactions": 18420, "loss": 3240, "status": "Stable"},
-            "Brazil": {"approval": 71.2, "expected": 93.1, "transactions": 26180, "loss": 48700, "status": "Critical"},
-            "Colombia": {"approval": 90.6, "expected": 91.5, "transactions": 13940, "loss": 4100, "status": "Stable"},
+            "Mexico": {
+                "approval": 91.8,
+                "expected": 92.4,
+                "transactions": 18420,
+                "loss": 3240,
+                "status": "Stable",
+            },
+            "Brazil": {
+                "approval": 71.2,
+                "expected": 93.1,
+                "transactions": 26180,
+                "loss": 48700,
+                "status": "Critical",
+            },
+            "Colombia": {
+                "approval": 90.6,
+                "expected": 91.5,
+                "transactions": 13940,
+                "loss": 4100,
+                "status": "Stable",
+            },
         },
         "providers": [
             {"name": "Stripe", "approval": 92.7, "status": "Operational"},
@@ -125,7 +143,8 @@ MERCHANT_DATA: dict[str, dict[str, Any]] = {
             "Colombia": [91.2, 91.0, 91.6, 91.1, 90.9, 90.6],
         },
         "incident": {
-            "severity": "Critical", "country": "Brazil",
+            "severity": "Critical",
+            "country": "Brazil",
             "title": "PIX payment approval drop",
             "root_cause": {"Country": "Brazil", "Provider": "dLocal", "Method": "PIX"},
             "diagnosis": "The degradation is concentrated in PIX transactions processed by dLocal.",
@@ -141,9 +160,27 @@ MERCHANT_DATA: dict[str, dict[str, Any]] = {
     "Carrefour": {
         "updated": "24 seconds ago",
         "countries": {
-            "Mexico": {"approval": 89.7, "expected": 90.2, "transactions": 12110, "loss": 1900, "status": "Stable"},
-            "Brazil": {"approval": 91.4, "expected": 91.7, "transactions": 15430, "loss": 1600, "status": "Stable"},
-            "Colombia": {"approval": 88.9, "expected": 89.5, "transactions": 9780, "loss": 2100, "status": "Stable"},
+            "Mexico": {
+                "approval": 89.7,
+                "expected": 90.2,
+                "transactions": 12110,
+                "loss": 1900,
+                "status": "Stable",
+            },
+            "Brazil": {
+                "approval": 91.4,
+                "expected": 91.7,
+                "transactions": 15430,
+                "loss": 1600,
+                "status": "Stable",
+            },
+            "Colombia": {
+                "approval": 88.9,
+                "expected": 89.5,
+                "transactions": 9780,
+                "loss": 2100,
+                "status": "Stable",
+            },
         },
         "providers": [
             {"name": "Stripe", "approval": 90.8, "status": "Operational"},
@@ -160,9 +197,27 @@ MERCHANT_DATA: dict[str, dict[str, Any]] = {
     "Despegar": {
         "updated": "11 seconds ago",
         "countries": {
-            "Mexico": {"approval": 87.1, "expected": 89.8, "transactions": 8420, "loss": 9800, "status": "Attention"},
-            "Brazil": {"approval": 90.4, "expected": 90.9, "transactions": 11260, "loss": 2700, "status": "Stable"},
-            "Colombia": {"approval": 89.8, "expected": 90.1, "transactions": 7340, "loss": 1400, "status": "Stable"},
+            "Mexico": {
+                "approval": 87.1,
+                "expected": 89.8,
+                "transactions": 8420,
+                "loss": 9800,
+                "status": "Attention",
+            },
+            "Brazil": {
+                "approval": 90.4,
+                "expected": 90.9,
+                "transactions": 11260,
+                "loss": 2700,
+                "status": "Stable",
+            },
+            "Colombia": {
+                "approval": 89.8,
+                "expected": 90.1,
+                "transactions": 7340,
+                "loss": 1400,
+                "status": "Stable",
+            },
         },
         "providers": [
             {"name": "Stripe", "approval": 90.6, "status": "Operational"},
@@ -175,7 +230,8 @@ MERCHANT_DATA: dict[str, dict[str, Any]] = {
             "Colombia": [90.0, 90.2, 90.1, 89.9, 90.0, 89.8],
         },
         "incident": {
-            "severity": "Medium", "country": "Mexico",
+            "severity": "Medium",
+            "country": "Mexico",
             "title": "Increased declines on Adyen",
             "root_cause": {"Country": "Mexico", "Provider": "Adyen", "Method": "CARD"},
             "diagnosis": "The degradation is concentrated in CARD payments processed by Adyen.",
@@ -191,9 +247,27 @@ MERCHANT_DATA: dict[str, dict[str, Any]] = {
 }
 
 MERCHANT_THEMES = {
-    "Rappi": {"primary": "#ff5a5f", "dark": "#8f2730", "soft": "#ffe8e5", "background": "#ffbeb8", "accent": "#ff9d82"},
-    "Carrefour": {"primary": "#1554a3", "dark": "#082d64", "soft": "#e5efff", "background": "#bdd5fa", "accent": "#e52329"},
-    "Despegar": {"primary": "#6f32c9", "dark": "#3e197c", "soft": "#eee4ff", "background": "#d5bbfa", "accent": "#f6c945"},
+    "Rappi": {
+        "primary": "#ff5a5f",
+        "dark": "#8f2730",
+        "soft": "#ffe8e5",
+        "background": "#ffbeb8",
+        "accent": "#ff9d82",
+    },
+    "Carrefour": {
+        "primary": "#1554a3",
+        "dark": "#082d64",
+        "soft": "#e5efff",
+        "background": "#bdd5fa",
+        "accent": "#e52329",
+    },
+    "Despegar": {
+        "primary": "#6f32c9",
+        "dark": "#3e197c",
+        "soft": "#eee4ff",
+        "background": "#d5bbfa",
+        "accent": "#f6c945",
+    },
 }
 
 MERCHANT_LOGOS = {
@@ -202,7 +276,8 @@ MERCHANT_LOGOS = {
     "Despegar": "https://upload.wikimedia.org/wikipedia/commons/d/db/Despegar.com_logo.svg",
 }
 
-st.markdown("""
+st.markdown(
+    """
 <style>
     :root {
         --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:20px; --space-6:24px; --space-8:32px;
@@ -325,7 +400,9 @@ st.markdown("""
     .st-key-chart_section { position:static; display:block; clear:both; margin:0; padding:0; }
     .st-key-chart_section > [data-testid="stVerticalBlock"] { gap:6px; }
     .st-key-chart_section h3 { margin:0 !important; }
-    .chart-top-spacer { height:12px; }
+    .chart-top-spacer { height:20px; }
+    .approval-chart { margin-bottom:-4px; }
+    .approval-chart svg { display:block; }
     .country-row { display:flex; align-items:center; flex-wrap:wrap; gap:0; min-height:38px; margin:0 0 var(--space-2); padding:7px 10px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-card); }
     .country-anchor { height:0; margin-top:0; }
     .country-entry { display:flex; align-items:center; gap:6px; white-space:nowrap; font-size:13px; }
@@ -338,7 +415,9 @@ st.markdown("""
     @media (max-width:900px) { .primary-alert { grid-template-columns:1fr; } .alert-side { justify-content:space-between; } .alert-facts { text-align:left; white-space:normal; } }
     @media (max-width:640px) { .block-container { padding-inline:var(--space-4); } .kpi-row { grid-template-columns:1fr; } .alert-side { align-items:flex-start; flex-direction:column; } }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 with st.sidebar:
@@ -356,66 +435,75 @@ with st.sidebar:
         )
 
 with st.popover("Judge Lab"):
-        st.markdown("#### Inject test incident")
-        st.caption("Configure a simulated degradation without leaving the dashboard.")
-        with st.form("judge_injection_form"):
-            merchant_names = list(MERCHANT_DATA)
-            lab_merchant = st.selectbox("Merchant", merchant_names, index=merchant_names.index(merchant))
-            lab_country = st.selectbox("Country", ["Mexico", "Brazil", "Colombia"])
-            lab_provider = st.selectbox("Provider", ["Any", "Stripe", "Adyen", "dLocal"], index=2)
-            lab_method = st.selectbox("Payment method", ["Any", *sorted(COUNTRY_PAYMENT_METHODS[lab_country])])
-            lab_bank = st.selectbox("Issuing bank", ["Any", *sorted(COUNTRY_ISSUING_BANKS[lab_country])])
-            target_rate = st.slider("Target approval rate", 0, 100, 30, 5)
-            inject = st.form_submit_button("Inject incident", type="primary", use_container_width=True)
+    st.markdown("#### Inject test incident")
+    st.caption("Configure a simulated degradation without leaving the dashboard.")
+    with st.form("judge_injection_form"):
+        merchant_names = list(MERCHANT_DATA)
+        lab_merchant = st.selectbox(
+            "Merchant", merchant_names, index=merchant_names.index(merchant)
+        )
+        lab_country = st.selectbox("Country", ["Mexico", "Brazil", "Colombia"])
+        lab_provider = st.selectbox(
+            "Provider", ["Any", "Stripe", "Adyen", "dLocal"], index=2
+        )
+        lab_method = st.selectbox(
+            "Payment method", ["Any", *sorted(COUNTRY_PAYMENT_METHODS[lab_country])]
+        )
+        lab_bank = st.selectbox(
+            "Issuing bank", ["Any", *sorted(COUNTRY_ISSUING_BANKS[lab_country])]
+        )
+        target_rate = st.slider("Target approval rate", 0, 100, 30, 5)
+        inject = st.form_submit_button(
+            "Inject incident", type="primary", use_container_width=True
+        )
 
-        if inject:
-            config = InjectionConfig(
-                merchant=lab_merchant,
-                country=lab_country,
-                provider=None if lab_provider == "Any" else lab_provider,
-                payment_method=None if lab_method == "Any" else lab_method,
-                issuing_bank=None if lab_bank == "Any" else lab_bank,
-                target_approval_rate=target_rate / 100,
-                duration_windows=6,
+    if inject:
+        config = InjectionConfig(
+            merchant=lab_merchant,
+            country=lab_country,
+            provider=None if lab_provider == "Any" else lab_provider,
+            payment_method=None if lab_method == "Any" else lab_method,
+            issuing_bank=None if lab_bank == "Any" else lab_bank,
+            target_approval_rate=target_rate / 100,
+            duration_windows=6,
+        )
+
+        try:
+            response = requests.post(
+                f"{API_BASE_URL}/injections",
+                json={"config": config.model_dump(mode="json")},
+                timeout=30,
             )
+            response.raise_for_status()
+            result = response.json()
 
-            try:
-                response = requests.post(
-                    f"{API_BASE_URL}/injections",
-                    json={"config": config.model_dump(mode="json")},
-                    timeout=30,
-                )
-                response.raise_for_status()
-                result = response.json()
+            st.session_state["last_injection"] = {
+                **config.model_dump(mode="json"),
+                "injection_id": result["injection_id"],
+            }
+            st.rerun()
+        except requests.RequestException as exc:
+            st.error(f"Could not create the test injection: {exc}")
 
-                st.session_state["last_injection"] = {
-                    **config.model_dump(mode="json"),
-                    "injection_id": result["injection_id"],
-                }
-                st.rerun()
-            except requests.RequestException as exc:
-                st.error(f"Could not create the test injection: {exc}")
+    last_injection = st.session_state.get("last_injection")
+    if last_injection:
+        st.success(f"Submitted to simulator: {last_injection['injection_id']}")
+        st.caption(
+            "The detector only receives the generated transactions, "
+            "never this configuration."
+        )
+        if st.button("Clear local notice", use_container_width=True):
+            del st.session_state["last_injection"]
+            st.rerun()
 
-        last_injection = st.session_state.get("last_injection")
-        if last_injection:
-            st.success(
-                f"Submitted to simulator: {last_injection['injection_id']}"
-            )
-            st.caption(
-                "The detector only receives the generated transactions, "
-                "never this configuration."
-            )
-            if st.button("Clear local notice", use_container_width=True):
-                del st.session_state["last_injection"]
-                st.rerun()
-
-
-        if st.session_state.get("active_injection"):
-            active = st.session_state["active_injection"]
-            st.error(f"Active: {active['merchant']} / {active['country']} / {active['target_approval_rate']:.0%}")
-            if st.button("Reset incident", use_container_width=True):
-                del st.session_state["active_injection"]
-                st.rerun()
+    if st.session_state.get("active_injection"):
+        active = st.session_state["active_injection"]
+        st.error(
+            f"Active: {active['merchant']} / {active['country']} / {active['target_approval_rate']:.0%}"
+        )
+        if st.button("Reset incident", use_container_width=True):
+            del st.session_state["active_injection"]
+            st.rerun()
 
 
 data = deepcopy(MERCHANT_DATA[merchant])
@@ -465,10 +553,13 @@ if live_incidents is not None:
         for item in evidence:
             root_cause[dimension_labels[item["dimension"]]] = item["value"]
 
-        affected_slice = ", ".join(
-            f"{dimension_labels[item['dimension']]}: {item['value']}"
-            for item in evidence
-        ) or "general payment traffic"
+        affected_slice = (
+            ", ".join(
+                f"{dimension_labels[item['dimension']]}: {item['value']}"
+                for item in evidence
+            )
+            or "general payment traffic"
+        )
 
         data["incident"] = {
             "severity": raw_incident["severity"].title(),
@@ -503,9 +594,7 @@ weighted_expected = (
 
 incident = data["incident"]
 active_incidents = (
-    len(live_incidents)
-    if live_incidents is not None
-    else (1 if incident else 0)
+    len(live_incidents) if live_incidents is not None else (1 if incident else 0)
 )
 st.markdown(
     f"""
@@ -574,12 +663,16 @@ else:
         unsafe_allow_html=True,
     )
 
+
 @st.fragment(run_every="2s")
 def render_live_summary() -> None:
     tick = st.session_state.get("live_demo_tick", 0) + 1
     st.session_state["live_demo_tick"] = tick
     approval_pattern = (0.0, 0.1, -0.1, 0.2, 0.1, -0.2)
-    live_approval = max(0.0, min(100.0, weighted_approval + approval_pattern[tick % len(approval_pattern)]))
+    live_approval = max(
+        0.0,
+        min(100.0, weighted_approval + approval_pattern[tick % len(approval_pattern)]),
+    )
     live_transactions = total_transactions + tick * 37
     incident_class = " incident" if active_incidents else ""
 
@@ -620,6 +713,7 @@ render_live_summary()
 def render_live_chart() -> None:
     render_approval_chart(data["trend"], countries, theme)
 
+
 if False:  # Kept as a Vega reference; pyarrow is blocked by the Windows policy.
     chart_rows = []
     for country, approvals in live_trends.items():
@@ -637,66 +731,142 @@ if False:  # Kept as a Vega reference; pyarrow is blocked by the Windows policy.
                 }
             )
 
-    st.vega_lite_chart(chart_rows, {
-        "background": "transparent",
-        "layer": [
-            {
-                "mark": {"type": "line", "strokeWidth": 2.5, "strokeCap": "round"},
-                "encoding": {
-                    "x": {"field": "window", "type": "ordinal", "title": "Latest windows"},
-                    "y": {"field": "approval", "type": "quantitative", "scale": {"domain": [55, 100]}, "title": "Approval %"},
-                    "color": {
-                        "field": "country", "type": "nominal", "title": "Country",
-                        "scale": {"range": [theme["primary"], theme["accent"], theme["dark"]]},
-                        "legend": {"symbolType": "stroke", "symbolStrokeWidth": 4},
+    st.vega_lite_chart(
+        chart_rows,
+        {
+            "background": "transparent",
+            "layer": [
+                {
+                    "mark": {"type": "line", "strokeWidth": 2.5, "strokeCap": "round"},
+                    "encoding": {
+                        "x": {
+                            "field": "window",
+                            "type": "ordinal",
+                            "title": "Latest windows",
+                        },
+                        "y": {
+                            "field": "approval",
+                            "type": "quantitative",
+                            "scale": {"domain": [55, 100]},
+                            "title": "Approval %",
+                        },
+                        "color": {
+                            "field": "country",
+                            "type": "nominal",
+                            "title": "Country",
+                            "scale": {
+                                "range": [
+                                    theme["primary"],
+                                    theme["accent"],
+                                    theme["dark"],
+                                ]
+                            },
+                            "legend": {"symbolType": "stroke", "symbolStrokeWidth": 4},
+                        },
                     },
                 },
-            },
-            {
-                "mark": {"type": "point", "size": 220, "opacity": 0},
-                "encoding": {
-                    "x": {"field": "window", "type": "ordinal"},
-                    "y": {"field": "approval", "type": "quantitative"},
-                    "tooltip": [
-                        {"field": "country", "type": "nominal", "title": "Country"},
-                        {"field": "window", "type": "ordinal", "title": "Window"},
-                        {"field": "approval", "type": "quantitative", "title": "Approval", "format": ".1f"},
-                        {"field": "expected", "type": "quantitative", "title": "Expected", "format": ".1f"},
-                        {"field": "difference", "type": "quantitative", "title": "Difference (pp)", "format": "+.1f"},
-                        {"field": "status", "type": "nominal", "title": "Status"},
-                    ],
+                {
+                    "mark": {"type": "point", "size": 220, "opacity": 0},
+                    "encoding": {
+                        "x": {"field": "window", "type": "ordinal"},
+                        "y": {"field": "approval", "type": "quantitative"},
+                        "tooltip": [
+                            {"field": "country", "type": "nominal", "title": "Country"},
+                            {"field": "window", "type": "ordinal", "title": "Window"},
+                            {
+                                "field": "approval",
+                                "type": "quantitative",
+                                "title": "Approval",
+                                "format": ".1f",
+                            },
+                            {
+                                "field": "expected",
+                                "type": "quantitative",
+                                "title": "Expected",
+                                "format": ".1f",
+                            },
+                            {
+                                "field": "difference",
+                                "type": "quantitative",
+                                "title": "Difference (pp)",
+                                "format": "+.1f",
+                            },
+                            {"field": "status", "type": "nominal", "title": "Status"},
+                        ],
+                    },
                 },
-            },
-            {
-                "transform": [{"filter": "datum.status === 'Critical drop'"}],
-                "mark": {"type": "point", "filled": True, "size": 90, "color": "#dc2638", "stroke": "white", "strokeWidth": 2},
-                "encoding": {
-                    "x": {"field": "window", "type": "ordinal"},
-                    "y": {"field": "approval", "type": "quantitative"},
-                    "tooltip": [
-                        {"field": "country", "type": "nominal", "title": "⚠ Affected country"},
-                        {"field": "approval", "type": "quantitative", "title": "Approval", "format": ".1f"},
-                        {"field": "expected", "type": "quantitative", "title": "Expected", "format": ".1f"},
-                        {"field": "difference", "type": "quantitative", "title": "Drop (pp)", "format": "+.1f"},
-                    ],
+                {
+                    "transform": [{"filter": "datum.status === 'Critical drop'"}],
+                    "mark": {
+                        "type": "point",
+                        "filled": True,
+                        "size": 90,
+                        "color": "#dc2638",
+                        "stroke": "white",
+                        "strokeWidth": 2,
+                    },
+                    "encoding": {
+                        "x": {"field": "window", "type": "ordinal"},
+                        "y": {"field": "approval", "type": "quantitative"},
+                        "tooltip": [
+                            {
+                                "field": "country",
+                                "type": "nominal",
+                                "title": "⚠ Affected country",
+                            },
+                            {
+                                "field": "approval",
+                                "type": "quantitative",
+                                "title": "Approval",
+                                "format": ".1f",
+                            },
+                            {
+                                "field": "expected",
+                                "type": "quantitative",
+                                "title": "Expected",
+                                "format": ".1f",
+                            },
+                            {
+                                "field": "difference",
+                                "type": "quantitative",
+                                "title": "Drop (pp)",
+                                "format": "+.1f",
+                            },
+                        ],
+                    },
                 },
-            },
-            {
-                "transform": [{"filter": "datum.status === 'Critical drop'"}],
-                "mark": {"type": "text", "text": "!", "dy": -15, "fontSize": 14, "fontWeight": "bold", "color": "#b91c2c"},
-                "encoding": {
-                    "x": {"field": "window", "type": "ordinal"},
-                    "y": {"field": "approval", "type": "quantitative"},
+                {
+                    "transform": [{"filter": "datum.status === 'Critical drop'"}],
+                    "mark": {
+                        "type": "text",
+                        "text": "!",
+                        "dy": -15,
+                        "fontSize": 14,
+                        "fontWeight": "bold",
+                        "color": "#b91c2c",
+                    },
+                    "encoding": {
+                        "x": {"field": "window", "type": "ordinal"},
+                        "y": {"field": "approval", "type": "quantitative"},
+                    },
                 },
+            ],
+            "config": {
+                "view": {"stroke": None},
+                "axis": {
+                    "gridColor": "rgba(90,105,135,.15)",
+                    "domain": False,
+                    "tickColor": "transparent",
+                    "labelColor": "#68758c",
+                    "titleColor": "#68758c",
+                    "titlePadding": 4,
+                },
+                "legend": {"labelColor": "#68758c", "titleColor": "#68758c"},
             },
-        ],
-        "config": {
-            "view": {"stroke": None},
-            "axis": {"gridColor": "rgba(90,105,135,.15)", "domain": False, "tickColor": "transparent", "labelColor": "#68758c", "titleColor": "#68758c", "titlePadding": 4},
-            "legend": {"labelColor": "#68758c", "titleColor": "#68758c"},
+            "height": 290,
         },
-        "height": 290,
-    }, use_container_width=True)
+        use_container_width=True,
+    )
 
 
 with st.container(key="chart_section"):
@@ -704,11 +874,17 @@ with st.container(key="chart_section"):
     st.markdown('<div id="monitoring"></div>', unsafe_allow_html=True)
     st.markdown("### Approval rate — live")
     render_live_chart()
-    st.markdown('<div id="countries" class="country-anchor"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div id="countries" class="country-anchor"></div>', unsafe_allow_html=True
+    )
     st.markdown("### Country status")
     country_entries = []
     for country_name, country in countries.items():
-        status_class = {"Stable": "status-ok", "Attention": "status-watch", "Critical": "status-critical"}[country["status"]]
+        status_class = {
+            "Stable": "status-ok",
+            "Attention": "status-watch",
+            "Critical": "status-critical",
+        }[country["status"]]
         country_entries.append(
             f"<div class='country-entry'><span class='country-name'>{country_name}</span>"
             f"<span class='country-separator'>·</span><span class='country-rate'>{country['approval']:.1f}%</span>"
@@ -720,7 +896,9 @@ with st.container(key="chart_section"):
         unsafe_allow_html=True,
     )
 
-st.markdown('<div id="incident-detail"></div><div id="diagnosis"></div>', unsafe_allow_html=True)
+st.markdown(
+    '<div id="incident-detail"></div><div id="diagnosis"></div>', unsafe_allow_html=True
+)
 st.markdown("### Root cause & recommendation")
 if incident is None:
     st.success("There are no incidents to diagnose.", icon="✅")
