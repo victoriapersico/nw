@@ -135,7 +135,9 @@ def simulate_remediation(request: SimulationRequest) -> RoutingRecommendation:
     try:
         return get_control_tower().simulate_remediation(request)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Unknown incident: {exc.args[0]}") from exc
+        raise HTTPException(
+            status_code=404, detail=f"Unknown incident: {exc.args[0]}"
+        ) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -150,6 +152,8 @@ def record_remediation_approval(decision: ApprovalDecision) -> ApprovalDecision:
         raise HTTPException(
             status_code=404, detail=f"Unknown recommendation: {exc.args[0]}"
         ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/remediation/executions", response_model=ExecutionResult)
@@ -168,7 +172,9 @@ def apply_simulated_remediation_change(
     try:
         return get_control_tower().apply_simulated_change(request)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Unknown recommendation: {exc.args[0]}") from exc
+        raise HTTPException(
+            status_code=404, detail=f"Unknown recommendation: {exc.args[0]}"
+        ) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -193,7 +199,11 @@ def get_remediation_workflow(recommendation_id: str) -> RoutingWorkflow:
     try:
         return get_control_tower().workflow(recommendation_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Unknown recommendation: {exc.args[0]}") from exc
+        raise HTTPException(
+            status_code=404, detail=f"Unknown recommendation: {exc.args[0]}"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post(
@@ -206,7 +216,11 @@ def rollback_simulated_remediation_change(
     try:
         return get_control_tower().rollback_simulated_change(change_id, request)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Unknown change: {exc.args[0]}") from exc
+        raise HTTPException(
+            status_code=404, detail=f"Unknown change: {exc.args[0]}"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post(
@@ -221,7 +235,9 @@ def complete_simulated_remediation_change(
     try:
         return get_control_tower().complete_simulated_change(change_id, request)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Unknown change: {exc.args[0]}") from exc
+        raise HTTPException(
+            status_code=404, detail=f"Unknown change: {exc.args[0]}"
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -256,5 +272,3 @@ def analyze(request: AnalysisRequest) -> AnalysisResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except AgentError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    ExecutionRequest,
-    ExecutionResult,

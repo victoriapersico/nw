@@ -133,7 +133,10 @@ required.
    **Inject incident**.
 6. The simulator advances, the detector reacts automatically, and the dashboard
    shows the incident, impact, diagnosis status, evidence, and recommendation.
-7. Click **Reset demo** before repeating. This calls `POST /monitor/reset`; it is
+7. For an eligible routing recommendation, click **Approve recommendation** and
+   then **Simulate application**. Inspect the before/expected/observed metrics and
+   audit log, then choose **Revert simulated change** or **Complete review**.
+8. Click **Reset demo** before repeating. This calls `POST /monitor/reset`; it is
    not a Streamlit-only reset.
 
 Known-good injection: **Rappi · Brazil · Stripe · target 20% · 6 windows**.
@@ -220,6 +223,13 @@ merchant×country minimum-volume/signal policy and are intentionally not promise
 | `POST` | `/monitor/reset` | Clean simulator/detector/RCA/live lifecycle |
 | `POST` | `/injections` | Activate a judge-controlled simulator change |
 | `GET` | `/merchants/{merchant}/incidents` | Merchant-scoped diagnosed incidents in backend priority order |
+| `POST` | `/remediation/approvals` | Record a human approval or rejection |
+| `GET` | `/remediation/workflows/{recommendation_id}` | Read the human-gated workflow state |
+| `POST` | `/remediation/changes` | Activate a local dry-run change after approval |
+| `GET` | `/remediation/changes/{change_id}` | Read before/after monitoring metrics |
+| `POST` | `/remediation/changes/{change_id}/rollback` | Revert the local simulated change |
+| `POST` | `/remediation/changes/{change_id}/complete` | Complete the simulated review |
+| `GET` | `/remediation/audit` | Read the append-only in-memory audit trail |
 
 The legacy `/analyze` starter route remains for compatibility; it is not the
 Control Tower demo path.

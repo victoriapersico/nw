@@ -349,6 +349,7 @@ class RemediationMonitoringWindow(BaseModel):
     window_end: datetime
     attempted_transactions: int = Field(ge=0)
     approval_rate: float | None = Field(default=None, ge=0, le=1)
+    error_rate: float | None = Field(default=None, ge=0, le=1)
     below_rollback_threshold: bool = False
 
 
@@ -365,6 +366,9 @@ class SimulatedRoutingChange(BaseModel):
     country: Country
     target_provider: Provider
     traffic_shift_pct: float = Field(gt=0, le=1)
+    before_approval_rate: float = Field(ge=0, le=1)
+    expected_approval_rate: float | None = Field(default=None, ge=0, le=1)
+    expected_recovered_value_per_hour: float = Field(ge=0)
     status: Literal["simulated_active", "rolled_back", "completed"]
     applied_at: datetime
     rollback_reference: str = Field(min_length=1, max_length=128)
@@ -406,6 +410,7 @@ class RoutingWorkflow(BaseModel):
         "rolled_back",
         "completed",
     ]
+    approval_decision_id: str | None = Field(default=None, max_length=128)
     change_id: str | None = Field(default=None, max_length=128)
     updated_at: datetime
     transition_reason: str = Field(min_length=1, max_length=1_000)
@@ -419,6 +424,7 @@ class RemediationAuditEvent(BaseModel):
     event_id: str = Field(min_length=1, max_length=128)
     occurred_at: datetime
     event_type: Literal[
+        "recommendation_created",
         "approval_recorded",
         "simulated_change_applied",
         "target_route_monitored",
@@ -429,6 +435,7 @@ class RemediationAuditEvent(BaseModel):
     change_id: str | None = Field(default=None, max_length=128)
     actor: str = Field(min_length=1, max_length=128)
     detail: str = Field(min_length=1, max_length=1_000)
+    recommendation: RoutingRecommendation | None = None
 
 
 # Backward-compatible names used by the first POST-01 implementation.

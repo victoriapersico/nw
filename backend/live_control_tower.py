@@ -150,7 +150,7 @@ class LiveControlTower:
                 raise RuntimeError("Remediation simulation is unavailable.")
             updated = item.model_copy(update={"remediation": proposal})
             self._incidents[item.incident.incident_id] = updated
-            self._ensure_workflow(proposal)
+            self._register_recommendation(proposal)
             return proposal
 
     def record_approval(self, decision: ApprovalDecision) -> ApprovalDecision:
@@ -166,6 +166,7 @@ class LiveControlTower:
                 recommendation.recommendation_id,
                 "approved" if decision.decision == "approved" else "rejected",
                 f"Human decision recorded: {decision.decision}.",
+                approval_decision_id=decision.decision_id,
             )
             self._record_audit(
                 event_type="approval_recorded",
@@ -223,6 +224,8 @@ class LiveControlTower:
                 raise ValueError("The recommendation is not in an approved workflow state.")
             if recommendation.status != "recommended" or not recommendation.recommended_option_id:
                 raise ValueError("This recommendation does not have an eligible selected option.")
+            if recommendation.proposed_traffic_cap is None:
+                raise ValueError("The recommendation does not include a proposed traffic cap.")
             if request.rollback_reference != recommendation.rollback_reference:
                 raise ValueError("The rollback reference does not match the recommendation.")
             simulation = next(
@@ -236,6 +239,10 @@ class LiveControlTower:
             )
             if simulation is None:
                 raise ValueError("The selected simulation is no longer eligible.")
+            if simulation.option.traffic_shift_pct != recommendation.proposed_traffic_cap:
+                raise ValueError(
+                    "The selected simulation does not match the recommended traffic cap."
+                )
             change = SimulatedRoutingChange(
                 change_id=f"change-{uuid4().hex}",
                 recommendation_id=recommendation.recommendation_id,
@@ -245,6 +252,11 @@ class LiveControlTower:
                 country=incident.country,
                 target_provider=simulation.option.target_provider,
                 traffic_shift_pct=simulation.option.traffic_shift_pct,
+                before_approval_rate=incident.actual_conversion,
+                expected_approval_rate=simulation.expected_approval_rate,
+                expected_recovered_value_per_hour=(
+                    simulation.expected_recovered_value_per_hour
+                ),
                 status="simulated_active",
                 applied_at=datetime.now(timezone.utc),
                 rollback_reference=request.rollback_reference,
@@ -280,6 +292,8 @@ class LiveControlTower:
                 raise KeyError(change_id)
             if change.status == "rolled_back":
                 return change.model_copy(deep=True)
+            if change.status != "simulated_active":
+                raise ValueError("Only an active simulated change can be rolled back.")
             return self._rollback_change(change, request.reason, request.decided_by)
 
     def complete_simulated_change(
@@ -419,7 +433,7 @@ class LiveControlTower:
             )
             self._incidents[incident.incident_id] = diagnosed
             if remediation is not None:
-                self._ensure_workflow(remediation)
+                self._register_recommendation(remediation)
             diagnosed_incidents.append(diagnosed)
 
         return LiveTickResponse(
@@ -456,6 +470,7 @@ class LiveControlTower:
                 window_end=batch.window_end,
                 attempted_transactions=attempts,
                 approval_rate=rate,
+                error_rate=1 - rate if rate is not None else None,
                 below_rollback_threshold=rate is not None and rate < ROLLBACK_APPROVAL_RATE,
             )
             updated = change.model_copy(update={"monitoring": [*change.monitoring, monitored]})
@@ -506,6 +521,8 @@ class LiveControlTower:
     def _ensure_workflow(self, recommendation: RoutingRecommendation) -> RoutingWorkflow:
         """Create the initial state once a recommendation is visible to an operator."""
 
+        if recommendation.status != "recommended" or not recommendation.recommended_option_id:
+            raise ValueError("A no-action recommendation cannot enter approval workflow.")
         existing = self._workflows.get(recommendation.recommendation_id)
         if existing is not None:
             return existing
@@ -519,18 +536,50 @@ class LiveControlTower:
         self._workflows[recommendation.recommendation_id] = workflow
         return workflow
 
+    def _register_recommendation(
+        self, recommendation: RoutingRecommendation
+    ) -> RoutingWorkflow | None:
+        """Audit every agent result and open approval only for an eligible action."""
+
+        already_audited = any(
+            event.event_type == "recommendation_created"
+            and event.recommendation_id == recommendation.recommendation_id
+            for event in self._audit_events
+        )
+        if not already_audited:
+            self._record_audit(
+                event_type="recommendation_created",
+                recommendation_id=recommendation.recommendation_id,
+                actor="routing-recommendation-agent",
+                detail=(
+                    "Routing recommendation is ready for human review."
+                    if recommendation.status == "recommended"
+                    else "The routing agent abstained; monitoring remains active."
+                ),
+                recommendation=recommendation,
+            )
+        if recommendation.status != "recommended":
+            return None
+        return self._ensure_workflow(recommendation)
+
     def _transition_workflow(
         self,
         recommendation_id: str,
         status: str,
         reason: str,
         *,
+        approval_decision_id: str | None = None,
         change_id: str | None = None,
     ) -> RoutingWorkflow:
         current = self._workflows[recommendation_id]
         updated = current.model_copy(
             update={
                 "status": status,
+                "approval_decision_id": (
+                    approval_decision_id
+                    if approval_decision_id is not None
+                    else current.approval_decision_id
+                ),
                 "change_id": change_id if change_id is not None else current.change_id,
                 "updated_at": datetime.now(timezone.utc),
                 "transition_reason": reason,
@@ -547,6 +596,7 @@ class LiveControlTower:
         actor: str,
         detail: str,
         change_id: str | None = None,
+        recommendation: RoutingRecommendation | None = None,
     ) -> None:
         self._audit_events.append(
             RemediationAuditEvent(
@@ -557,6 +607,7 @@ class LiveControlTower:
                 change_id=change_id,
                 actor=actor,
                 detail=detail,
+                recommendation=recommendation,
             )
         )
 

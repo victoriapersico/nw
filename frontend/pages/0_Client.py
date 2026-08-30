@@ -13,6 +13,16 @@ from backend.schemas import (
     COUNTRY_PAYMENT_METHODS,
     InjectionConfig,
 )
+from frontend.remediation_client import (
+    RemediationClientError,
+    apply_simulated_change,
+    complete_simulated_change,
+    fetch_audit,
+    fetch_simulated_change,
+    fetch_workflow,
+    record_decision,
+    rollback_simulated_change,
+)
 
 API_BASE_URL = os.getenv(
     "CONTROL_TOWER_API_URL",
@@ -50,6 +60,153 @@ def advance_and_fetch_monitoring(merchant: str) -> dict[str, Any] | None:
         return response.json()
     except requests.RequestException:
         return None
+
+
+def _render_recommendation_audit(recommendation_id: str) -> None:
+    """Show the append-only events without exposing provider operations."""
+
+    try:
+        events = fetch_audit(API_BASE_URL, recommendation_id)
+    except RemediationClientError as exc:
+        st.caption(f"Audit unavailable: {exc}")
+        return
+    with st.expander(f"Audit log · {len(events)} events"):
+        for event in reversed(events):
+            label = event["event_type"].replace("_", " ").title()
+            st.markdown(f"**{label}** · `{event['actor']}`")
+            st.caption(event["detail"])
+
+
+def _render_routing_workflow(routing: dict[str, Any]) -> None:
+    """Render the human gate and simulated lifecycle for one recommendation."""
+
+    recommendation_id = routing["recommendation_id"]
+    try:
+        workflow = fetch_workflow(API_BASE_URL, recommendation_id)
+    except RemediationClientError as exc:
+        st.error(f"Could not load the approval workflow: {exc}")
+        _render_recommendation_audit(recommendation_id)
+        return
+
+    status = workflow["status"]
+    st.markdown(f"**Workflow status:** `{status}`")
+    st.caption(workflow["transition_reason"])
+
+    if status == "pending_approval":
+        approve_column, reject_column = st.columns(2)
+        with approve_column:
+            if st.button(
+                "Approve recommendation",
+                type="primary",
+                use_container_width=True,
+                key=f"approve-{recommendation_id}",
+            ):
+                try:
+                    record_decision(API_BASE_URL, recommendation_id, "approved")
+                    st.rerun()
+                except RemediationClientError as exc:
+                    st.error(str(exc))
+        with reject_column:
+            if st.button(
+                "Reject",
+                use_container_width=True,
+                key=f"reject-{recommendation_id}",
+            ):
+                try:
+                    record_decision(API_BASE_URL, recommendation_id, "rejected")
+                    st.rerun()
+                except RemediationClientError as exc:
+                    st.error(str(exc))
+    elif status == "approved":
+        approval_decision_id = workflow.get("approval_decision_id")
+        if approval_decision_id and routing.get("rollback_reference"):
+            if st.button(
+                "Simulate application",
+                type="primary",
+                use_container_width=True,
+                key=f"apply-{recommendation_id}",
+            ):
+                try:
+                    apply_simulated_change(
+                        API_BASE_URL,
+                        recommendation_id,
+                        approval_decision_id,
+                        routing["rollback_reference"],
+                    )
+                    st.rerun()
+                except RemediationClientError as exc:
+                    st.error(str(exc))
+        else:
+            st.error("The approved workflow is missing its safe application references.")
+    elif status in {"simulated_active", "rolled_back", "completed"}:
+        change_id = workflow.get("change_id")
+        if change_id is None:
+            st.error("The workflow is missing its simulated change reference.")
+        else:
+            try:
+                change = fetch_simulated_change(API_BASE_URL, change_id)
+            except RemediationClientError as exc:
+                st.error(str(exc))
+            else:
+                latest = change["monitoring"][-1] if change["monitoring"] else None
+                before, expected, observed = st.columns(3)
+                before.metric("Before approval", f"{change['before_approval_rate']:.1%}")
+                expected.metric(
+                    "Expected after",
+                    (
+                        f"{change['expected_approval_rate']:.1%}"
+                        if change["expected_approval_rate"] is not None
+                        else "N/A"
+                    ),
+                )
+                observed.metric(
+                    "Observed target",
+                    (
+                        f"{latest['approval_rate']:.1%}"
+                        if latest and latest["approval_rate"] is not None
+                        else "Awaiting window"
+                    ),
+                )
+                st.caption(
+                    f"Expected recovery: US$ "
+                    f"{change['expected_recovered_value_per_hour']:,.0f}/h"
+                    + (
+                        f" · Observed errors: {latest['error_rate']:.1%}"
+                        if latest and latest["error_rate"] is not None
+                        else ""
+                    )
+                )
+                if status == "simulated_active":
+                    rollback_column, complete_column = st.columns(2)
+                    with rollback_column:
+                        if st.button(
+                            "Revert simulated change",
+                            use_container_width=True,
+                            key=f"rollback-{change_id}",
+                        ):
+                            try:
+                                rollback_simulated_change(API_BASE_URL, change_id)
+                                st.rerun()
+                            except RemediationClientError as exc:
+                                st.error(str(exc))
+                    with complete_column:
+                        if st.button(
+                            "Complete review",
+                            type="primary",
+                            use_container_width=True,
+                            key=f"complete-{change_id}",
+                        ):
+                            try:
+                                complete_simulated_change(API_BASE_URL, change_id)
+                                st.rerun()
+                            except RemediationClientError as exc:
+                                st.error(str(exc))
+                elif status == "rolled_back":
+                    st.warning(change["rollback_reason"] or "Simulated change reverted.")
+                else:
+                    st.success("Simulated rollout review completed. No provider was contacted.")
+
+    _render_recommendation_audit(recommendation_id)
 
 
 def render_approval_chart(
@@ -654,12 +811,14 @@ if live_incidents is not None:
                 None,
             )
             routing_recommendation = {
+                "recommendation_id": remediation["recommendation_id"],
                 "status": remediation["status"],
                 "rationale": remediation["rationale"],
                 "confidence": remediation.get("confidence", 0.0),
                 "traffic_cap": remediation.get("proposed_traffic_cap"),
                 "abstention_reason": remediation.get("abstention_reason"),
                 "required_approval": remediation["required_approval"],
+                "rollback_reference": remediation.get("rollback_reference"),
                 "target_provider": (
                     selected_simulation["option"]["target_provider"]
                     if selected_simulation is not None
@@ -1071,10 +1230,12 @@ else:
                     "Recommendation only · Human approval required · "
                     "No routing change has occurred"
                 )
+                _render_routing_workflow(routing)
             else:
                 st.warning("No routing change recommended. Continue monitoring.")
                 st.caption(
                     routing["abstention_reason"] or routing["rationale"]
                 )
+                _render_recommendation_audit(routing["recommendation_id"])
 
 st.caption("Control Tower MVP — Simulated data for validating the demo flow")

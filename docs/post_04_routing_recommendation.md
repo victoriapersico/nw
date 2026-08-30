@@ -51,9 +51,9 @@ Mock Mode ranks eligible alternatives by confidence-adjusted expected recovery,
 then prefers the smaller traffic shift and a stable provider-name tie-breaker.
 It returns the same `RoutingRecommendation` contract without making an API call.
 
-## Integration contract for approval and audit
+## Approval and audit integration
 
-The downstream human-assisted workflow must accept only a recommendation where:
+The POST-03 human-assisted workflow accepts only a recommendation where:
 
 - `status == "recommended"`;
 - `recommended_option_id` resolves to an eligible attached simulation;
@@ -61,8 +61,8 @@ The downstream human-assisted workflow must accept only a recommendation where:
 - `required_approval == "merchant_operations"`;
 - `dry_run == true`.
 
-Its first state is `pending_approval`. The audit event should store the complete
-serialized `RoutingRecommendation`, the actor or system that created it, and a
-timestamp. Rejection, application simulation, monitoring, and rollback events
-belong to the downstream workflow and must not be authored by the recommendation
-agent.
+Its first state is `pending_approval`. The `recommendation_created` audit event
+stores the complete serialized `RoutingRecommendation`, the creating actor, and
+a timestamp. A safe abstention is also audited but does not create a workflow.
+Rejection, application simulation, monitoring, completion, and rollback events
+belong to POST-03 and are never authored by the recommendation agent.
