@@ -196,6 +196,30 @@ def advance_and_fetch_monitoring(merchant: str) -> dict[str, Any] | None:
         return None
 
 
+def initialize_clean_dashboard_session() -> None:
+    """Start each new browser session from the deterministic clean demo state."""
+
+    if st.session_state.get("dashboard_clean_session_initialized"):
+        return
+    try:
+        response = requests.post(f"{API_BASE_URL}/monitor/reset", timeout=30)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        st.session_state["live_api_error"] = str(exc)
+        return
+
+    for state_key in (
+        "monitoring_snapshot",
+        "latest_live_incidents",
+        "last_injection",
+        "active_injection",
+        "injection_id",
+    ):
+        st.session_state.pop(state_key, None)
+    st.session_state["dashboard_clean_session_initialized"] = True
+    st.session_state.pop("live_api_error", None)
+
+
 def remember_incident_recovery(
     incident: dict[str, Any], merchant: str
 ) -> list[dict[str, Any]]:
@@ -658,9 +682,9 @@ st.markdown(
     [data-testid="stSidebarUserContent"] { width:100%; height:100%; overflow:hidden !important; padding:var(--space-2) var(--space-2) !important; }
     [data-testid="stSidebar"] [data-testid="stImage"] { display:flex; justify-content:center; background:transparent; border:0; padding:0; margin:0; box-shadow:none; }
     [data-testid="stSidebar"] [data-testid="stImage"] img { display:block; margin:0 auto; }
-    [data-testid="stPopoverBody"] { min-width:340px; border:1px solid #cfd6e1; border-radius:var(--radius-card); box-shadow:0 12px 28px rgba(16,24,40,.14); }
-    [data-testid="stPopover"] { position:fixed; right:0; top:42%; z-index:999999; width:auto !important; }
-    [data-testid="stPopover"] > button { min-height:112px; width:34px; padding:.65rem .35rem !important; color:white !important; background:#17233a !important; border:0 !important; border-left:3px solid var(--merchant-primary) !important; border-radius:0 !important; box-shadow:none; writing-mode:vertical-rl; transform:rotate(180deg); font-size:.68rem; letter-spacing:.08em; }
+    .st-key-judge_lab [data-testid="stPopoverBody"] { min-width:340px; border:1px solid #cfd6e1; border-radius:var(--radius-card); box-shadow:0 12px 28px rgba(16,24,40,.14); }
+    .st-key-judge_lab[data-testid="stPopover"], .st-key-judge_lab [data-testid="stPopover"] { position:fixed; right:0; top:42%; z-index:999999; width:auto !important; }
+    .st-key-judge_lab[data-testid="stPopover"] > button, .st-key-judge_lab [data-testid="stPopover"] > button { min-height:112px; width:34px; padding:.65rem .35rem !important; color:white !important; background:#17233a !important; border:0 !important; border-left:3px solid var(--merchant-primary) !important; border-radius:0 !important; box-shadow:none; writing-mode:vertical-rl; transform:rotate(180deg); font-size:.68rem; letter-spacing:.08em; }
     [data-testid="stMetric"] { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-card); padding:10px var(--space-3); box-shadow:none; }
     [data-testid="stMetricValue"] { color:#172033; font-size:24px; line-height:28px; }
     [data-testid="stVegaLiteChart"] { background:transparent !important; border:0; border-radius:0; padding:var(--space-1) var(--space-6) 0 0; margin-bottom:0 !important; box-shadow:none; }
@@ -762,6 +786,7 @@ st.markdown(
 )
 
 st.session_state["live_playback"] = True
+initialize_clean_dashboard_session()
 
 pending_merchant = st.session_state.pop("pending_monitored_company", None)
 if pending_merchant in MERCHANT_DATA:
