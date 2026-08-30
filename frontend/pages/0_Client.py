@@ -11,10 +11,22 @@ from typing import Any
 
 import streamlit as st
 
-from backend.schemas import (
-    COUNTRY_ISSUING_BANKS,
-    COUNTRY_PAYMENT_METHODS,
-    InjectionConfig,
+from backend.schemas import InjectionConfig
+from frontend.injection_scope import (
+    clear_scope_state,
+    render_scope_filter,
+    render_scope_selector,
+)
+from frontend.remediation_client import (
+    RemediationClientError,
+    apply_simulated_change,
+    complete_simulated_change,
+    fetch_audit,
+    fetch_simulated_change,
+    fetch_workflow,
+    record_decision,
+    revoke_approval,
+    rollback_simulated_change,
 )
 
 API_BASE_URL = os.getenv(
@@ -407,6 +419,184 @@ def render_remediation_panel(
             st.error(f"Could not run the dry-run: {exc}")
     elif execution is not None:
         st.success(f"{execution['reason']} Executed: {execution['executed']}.")
+def _render_recommendation_audit(recommendation_id: str) -> None:
+    """Show the append-only events without exposing provider operations."""
+
+    try:
+        events = fetch_audit(API_BASE_URL, recommendation_id)
+    except RemediationClientError as exc:
+        st.caption(f"Audit unavailable: {exc}")
+        return
+    with st.expander(f"Audit log · {len(events)} events"):
+        for event in reversed(events):
+            label = event["event_type"].replace("_", " ").title()
+            st.markdown(f"**{label}** · `{event['actor']}`")
+            st.caption(event["detail"])
+
+
+def _render_routing_workflow(routing: dict[str, Any]) -> None:
+    """Render the human gate and simulated lifecycle for one recommendation."""
+
+    recommendation_id = routing["recommendation_id"]
+    try:
+        workflow = fetch_workflow(API_BASE_URL, recommendation_id)
+    except RemediationClientError as exc:
+        st.error(f"Could not load the approval workflow: {exc}")
+        _render_recommendation_audit(recommendation_id)
+        return
+
+    status = workflow["status"]
+    st.markdown(f"**Workflow status:** `{status}`")
+    st.caption(workflow["transition_reason"])
+
+    if status == "pending_approval":
+        approve_column, reject_column = st.columns(2)
+        with approve_column:
+            if st.button(
+                "Approve recommendation",
+                type="primary",
+                use_container_width=True,
+                key=f"approve-{recommendation_id}",
+            ):
+                try:
+                    record_decision(
+                        API_BASE_URL,
+                        recommendation_id,
+                        routing["merchant"],
+                        "approved",
+                    )
+                    st.rerun()
+                except RemediationClientError as exc:
+                    st.error(str(exc))
+        with reject_column:
+            if st.button(
+                "Reject",
+                use_container_width=True,
+                key=f"reject-{recommendation_id}",
+            ):
+                try:
+                    record_decision(
+                        API_BASE_URL,
+                        recommendation_id,
+                        routing["merchant"],
+                        "rejected",
+                    )
+                    st.rerun()
+                except RemediationClientError as exc:
+                    st.error(str(exc))
+    elif status == "approved":
+        approval_decision_id = workflow.get("approval_decision_id")
+        if approval_decision_id is None:
+            st.error("The approved workflow is missing its safe application references.")
+        else:
+            apply_column, revoke_column = st.columns(2)
+            with apply_column:
+                if routing.get("rollback_reference") and st.button(
+                    "Simulate application",
+                    type="primary",
+                    use_container_width=True,
+                    key=f"apply-{recommendation_id}",
+                ):
+                    try:
+                        apply_simulated_change(
+                            API_BASE_URL,
+                            recommendation_id,
+                            approval_decision_id,
+                            routing["rollback_reference"],
+                        )
+                        st.rerun()
+                    except RemediationClientError as exc:
+                        st.error(str(exc))
+            with revoke_column:
+                if st.button(
+                    "Revoke approval",
+                    use_container_width=True,
+                    key=f"revoke-{recommendation_id}",
+                ):
+                    try:
+                        revoke_approval(
+                            API_BASE_URL,
+                            approval_decision_id,
+                            routing["merchant"],
+                        )
+                        st.rerun()
+                    except RemediationClientError as exc:
+                        st.error(str(exc))
+    elif status == "rejected":
+        st.warning("The operator rejected this recommendation.")
+    elif status == "expired":
+        st.warning("The approval expired before simulation activation.")
+    elif status == "revoked":
+        st.warning("The operator revoked approval before simulation activation.")
+    elif status in {"simulated_active", "rolled_back", "completed"}:
+        change_id = workflow.get("change_id")
+        if change_id is None:
+            st.error("The workflow is missing its simulated change reference.")
+        else:
+            try:
+                change = fetch_simulated_change(API_BASE_URL, change_id)
+            except RemediationClientError as exc:
+                st.error(str(exc))
+            else:
+                latest = change["monitoring"][-1] if change["monitoring"] else None
+                before, expected, observed = st.columns(3)
+                before.metric("Before approval", f"{change['before_approval_rate']:.1%}")
+                expected.metric(
+                    "Expected after",
+                    (
+                        f"{change['expected_approval_rate']:.1%}"
+                        if change["expected_approval_rate"] is not None
+                        else "N/A"
+                    ),
+                )
+                observed.metric(
+                    "Observed target",
+                    (
+                        f"{latest['approval_rate']:.1%}"
+                        if latest and latest["approval_rate"] is not None
+                        else "Awaiting window"
+                    ),
+                )
+                st.caption(
+                    f"Expected recovery: US$ "
+                    f"{change['expected_recovered_value_per_hour']:,.0f}/h"
+                    + (
+                        f" · Observed errors: {latest['error_rate']:.1%}"
+                        if latest and latest["error_rate"] is not None
+                        else ""
+                    )
+                )
+                if status == "simulated_active":
+                    rollback_column, complete_column = st.columns(2)
+                    with rollback_column:
+                        if st.button(
+                            "Revert simulated change",
+                            use_container_width=True,
+                            key=f"rollback-{change_id}",
+                        ):
+                            try:
+                                rollback_simulated_change(API_BASE_URL, change_id)
+                                st.rerun()
+                            except RemediationClientError as exc:
+                                st.error(str(exc))
+                    with complete_column:
+                        if st.button(
+                            "Complete review",
+                            type="primary",
+                            use_container_width=True,
+                            key=f"complete-{change_id}",
+                        ):
+                            try:
+                                complete_simulated_change(API_BASE_URL, change_id)
+                                st.rerun()
+                            except RemediationClientError as exc:
+                                st.error(str(exc))
+                elif status == "rolled_back":
+                    st.warning(change["rollback_reason"] or "Simulated change reverted.")
+                else:
+                    st.success("Simulated rollout review completed. No provider was contacted.")
+
+    _render_recommendation_audit(recommendation_id)
 
 
 def render_approval_chart(
@@ -896,6 +1086,10 @@ with st.container(key="demo_toolbar"):
 
 live_playback = True
 
+if st.session_state.pop("dashboard_judge_reset_pending", False):
+    clear_scope_state(key_prefix="dashboard_judge")
+    clear_scope_state(key_prefix="judge_lab")
+
 with st.popover("Judge Lab"):
     st.markdown("#### Inject test incident")
     st.caption("Configure a simulated degradation without leaving the dashboard.")
@@ -907,21 +1101,16 @@ with st.popover("Judge Lab"):
         ["Mexico", "Brazil", "Colombia"],
         key="judge_injection_country",
     )
+    lab_scope = render_scope_selector(key_prefix="dashboard_judge")
     with st.form("judge_injection_form"):
         merchant_names = list(MERCHANT_DATA)
         lab_merchant = st.selectbox(
             "Merchant", merchant_names, index=merchant_names.index(merchant)
         )
-        lab_provider = st.selectbox(
-            "Provider",
-            ["Any", "Stripe", "Adyen", "dLocal"],
-            key="judge_injection_provider_v2",
-        )
-        lab_method = st.selectbox(
-            "Payment method", ["Any", *sorted(COUNTRY_PAYMENT_METHODS[lab_country])]
-        )
-        lab_bank = st.selectbox(
-            "Issuing bank", ["Any", *sorted(COUNTRY_ISSUING_BANKS[lab_country])]
+        lab_slice = render_scope_filter(
+            country=lab_country,
+            scope=lab_scope,
+            key_prefix="dashboard_judge",
         )
         target_rate = st.slider("Target approval rate", 0, 100, 30, 5)
         duration_windows = st.slider(
@@ -933,16 +1122,16 @@ with st.popover("Judge Lab"):
             help="Each window represents five simulated minutes. 30 windows keep a demo incident visible for about 2.5 real minutes.",
         )
         inject = st.form_submit_button(
-            "Inject incident", type="primary", use_container_width=True
+            "Inject incident", type="primary", width="stretch"
         )
 
     if inject:
         config = InjectionConfig(
             merchant=lab_merchant,
             country=lab_country,
-            provider=None if lab_provider == "Any" else lab_provider,
-            payment_method=None if lab_method == "Any" else lab_method,
-            issuing_bank=None if lab_bank == "Any" else lab_bank,
+            provider=lab_slice.provider,
+            payment_method=lab_slice.payment_method,
+            issuing_bank=lab_slice.issuing_bank,
             target_approval_rate=target_rate / 100,
             duration_windows=duration_windows,
         )
@@ -1009,18 +1198,28 @@ with st.popover("Judge Lab"):
             "The detector only receives the generated transactions, "
             "never this configuration."
         )
-        if st.button("Clear local notice", use_container_width=True):
-            del st.session_state["last_injection"]
-            st.rerun()
-
-    if st.session_state.get("active_injection"):
-        active = st.session_state["active_injection"]
+    active_injection = st.session_state.get("active_injection")
+    if active_injection:
+        active = active_injection
         st.error(
             f"Active: {active['merchant']} / {active['country']} / {active['target_approval_rate']:.0%}"
         )
-        if st.button("Reset incident", use_container_width=True):
-            del st.session_state["active_injection"]
-            st.rerun()
+
+    if last_injection or active_injection:
+        if st.button("Reset demo", width="stretch"):
+            try:
+                response = requests.post(
+                    f"{API_BASE_URL}/monitor/reset",
+                    timeout=30,
+                )
+                response.raise_for_status()
+                st.session_state.pop("last_injection", None)
+                st.session_state.pop("active_injection", None)
+                st.session_state.pop("injection_id", None)
+                st.session_state["dashboard_judge_reset_pending"] = True
+                st.rerun()
+            except requests.RequestException as exc:
+                st.error(f"Backend reset failed: {exc}")
 
 
 data = deepcopy(MERCHANT_DATA[merchant])
@@ -1040,6 +1239,7 @@ if live_incidents is not None:
         raw_incident = primary["incident"]
         diagnosis = primary["diagnosis"]
         evidence = diagnosis["evidence"]
+        remediation = primary.get("remediation")
 
         country_state = data["countries"][raw_incident["country"]]
         country_state["approval"] = raw_incident["actual_conversion"] * 100
@@ -1066,40 +1266,55 @@ if live_incidents is not None:
             "decline_code": "Decline code",
             "intersection": "Intersection",
         }
-        diagnosis_confirmed = diagnosis["diagnosis_status"] == "confirmed"
-        displayed_evidence = (
-            [
-                item
-                for item in evidence
-                if item["dimension"] in diagnosis["root_cause_dimensions"]
-            ]
-            if diagnosis_confirmed
-            else evidence
-        )
-        grouped_evidence: dict[str, list[str]] = {}
-        for item in displayed_evidence:
-            label = dimension_labels[item["dimension"]]
-            values = grouped_evidence.setdefault(label, [])
-            if item["value"] not in values:
-                values.append(item["value"])
         root_cause = {"Country": raw_incident["country"]}
-        root_cause.update(
-            {label: "; ".join(values) for label, values in grouped_evidence.items()}
-        )
+        for item in evidence:
+            # Evidence arrives ranked. Keep the strongest value for each
+            # dimension instead of replacing it with a weaker secondary slice.
+            root_cause.setdefault(
+                dimension_labels[item["dimension"]], item["value"]
+            )
 
         headline_evidence = [
             item
-            for item in displayed_evidence
+            for item in evidence
             if item["dimension"] in {"provider", "payment_method", "issuing_bank"}
         ][:2]
         affected_slice = " · ".join(
             item["value"] for item in headline_evidence
         ) or "payment traffic"
-        incident_title = (
-            f"{affected_slice} approval degradation"
-            if diagnosis_confirmed
-            else f"Approval degradation under investigation — {raw_incident['country']}"
-        )
+
+        routing_recommendation = None
+        if remediation is not None:
+            selected_simulation = next(
+                (
+                    item
+                    for item in remediation["alternatives"]
+                    if item["option"]["option_id"]
+                    == remediation["recommended_option_id"]
+                ),
+                None,
+            )
+            routing_recommendation = {
+                "recommendation_id": remediation["recommendation_id"],
+                "merchant": raw_incident["merchant"],
+                "status": remediation["status"],
+                "rationale": remediation["rationale"],
+                "confidence": remediation.get("confidence", 0.0),
+                "traffic_cap": remediation.get("proposed_traffic_cap"),
+                "abstention_reason": remediation.get("abstention_reason"),
+                "required_approval": remediation["required_approval"],
+                "rollback_reference": remediation.get("rollback_reference"),
+                "target_provider": (
+                    selected_simulation["option"]["target_provider"]
+                    if selected_simulation is not None
+                    else None
+                ),
+                "expected_recovery_per_hour": (
+                    selected_simulation["expected_recovered_value_per_hour"]
+                    if selected_simulation is not None
+                    else 0.0
+                ),
+            }
 
         data["incident"] = {
             "incident_id": raw_incident["incident_id"],
@@ -1107,19 +1322,10 @@ if live_incidents is not None:
             "estimated_loss": raw_incident["estimated_loss"],
             "severity": raw_incident["severity"].title(),
             "country": raw_incident["country"],
-            "title": incident_title,
+            "title": f"{affected_slice} approval degradation",
             "root_cause": root_cause,
             "diagnosis_status": diagnosis["diagnosis_status"],
             "diagnosis": diagnosis["explanation"],
-            "executive_summary": diagnosis.get("executive_summary"),
-            "evidence_citations": diagnosis.get("evidence_citations", []),
-            "evidence_citation_labels": {
-                f"evidence-{index}": (
-                    f"{dimension_labels[item['dimension']]}: {item['value']} "
-                    f"({item['baseline_metric']:.1%} → {item['live_metric']:.1%})"
-                )
-                for index, item in enumerate(evidence, start=1)
-            },
             "diagnosis_points": [
                 (
                     f"{dimension_labels[item['dimension']]}: "
@@ -1132,6 +1338,7 @@ if live_incidents is not None:
             "recommendation": diagnosis["recommended_action"],
             "confidence": diagnosis["confidence"],
             "remediation": primary.get("remediation"),
+            "routing_recommendation": routing_recommendation,
         }
 
 countries = data["countries"]
@@ -1543,17 +1750,10 @@ st.markdown("### Root cause, recommended recovery & simulation")
 if incident is None:
     st.success("There are no active incidents to simulate.", icon="✅")
 else:
-    if incident.get("executive_summary"):
-        st.info(incident["executive_summary"], icon="📌")
-    diagnosis_confirmed = incident.get("diagnosis_status") == "confirmed"
     evidence_column, simulation_column = st.columns((1, 1.45))
     with evidence_column:
         with st.container(border=True):
-            st.markdown(
-                "#### Confirmed root cause"
-                if diagnosis_confirmed
-                else "#### Evidence under review"
-            )
+            st.markdown("#### Why is approval falling?")
             root_cause_items = "".join(
                 f"<div class='cause-item'><div class='cause-label'>{label}</div>"
                 f"<div class='cause-value'>{value}</div></div>"
@@ -1563,32 +1763,38 @@ else:
                 f"<div class='root-cause-grid'>{root_cause_items}</div>",
                 unsafe_allow_html=True,
             )
-            st.markdown("##### Operations assessment")
-            st.write(incident["diagnosis"])
             for point in incident["diagnosis_points"]:
                 st.markdown(f"- {point}")
             st.caption(f"Evidence confidence: {incident['confidence']:.0%}")
-            if incident.get("evidence_citations"):
-                citation_labels = incident["evidence_citation_labels"]
+    with simulation_column:
+        with st.container(border=True):
+            st.markdown("#### Recommended action")
+            routing = incident.get("routing_recommendation")
+            if routing is None:
+                st.info(incident["recommendation"], icon="💡")
+            elif routing["status"] == "recommended":
+                st.info(
+                    f"Shift {routing['traffic_cap']:.0%} of the affected traffic "
+                    f"to {routing['target_provider']}.",
+                    icon="💡",
+                )
                 st.caption(
-                    "Evidence citations: "
-                    + "; ".join(
-                        citation_labels.get(citation, citation)
-                        for citation in incident["evidence_citations"]
-                    )
+                    f"Estimated recovery: US$ "
+                    f"{routing['expected_recovery_per_hour']:,.0f}/h · "
+                    f"Confidence: {routing['confidence']:.0%}"
                 )
-
-    if incident.get("incident_id"):
-        with simulation_column:
-            with st.container(border=True):
-                render_remediation_panel(
-                    merchant=merchant,
-                    incident_id=incident["incident_id"],
-                    remediation=incident.get("remediation"),
+                st.write(routing["rationale"])
+                st.caption(
+                    "Recommendation only · Human approval required · "
+                    "No routing change has occurred"
                 )
-    else:
-        with simulation_column:
-            st.info("Recovery simulation is available when using the live Control Tower API.")
+                _render_routing_workflow(routing)
+            else:
+                st.warning("No routing change recommended. Continue monitoring.")
+                st.caption(
+                    routing["abstention_reason"] or routing["rationale"]
+                )
+                _render_recommendation_audit(routing["recommendation_id"])
 
 render_incident_recovery_log(recovery_log)
 

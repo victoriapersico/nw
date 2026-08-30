@@ -11,6 +11,10 @@ from backend.email_mock import MockEmailMessage, MockEmailOutbox
 from backend.live_control_tower import LiveControlTower, build_live_control_tower
 from backend.schemas import (
     ApprovalDecision,
+    ApprovalRequest,
+    ApprovalRevocationRequest,
+    Alert,
+    AlertAcknowledgeRequest,
     AnalysisRequest,
     AnalysisResponse,
     CreateInjectionRequest,
@@ -22,7 +26,15 @@ from backend.schemas import (
     Merchant,
     MerchantMonitoringResponse,
     MerchantIncidentsResponse,
+    PostIncidentReport,
     RoutingRecommendation,
+    RemediationAuditEvent,
+    SimulatedChangeRequest,
+    SimulatedChangeCompletionRequest,
+    SimulatedChangeRollbackRequest,
+    SimulatedRoutingChange,
+    SimilarIncident,
+    RoutingWorkflow,
     SimulationRequest,
     TransactionBatch,
 )
@@ -270,21 +282,48 @@ def simulate_remediation(request: SimulationRequest) -> RoutingRecommendation:
     try:
         return get_control_tower().simulate_remediation(request)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Unknown incident: {exc.args[0]}") from exc
+        raise HTTPException(
+            status_code=404, detail=f"Unknown incident: {exc.args[0]}"
+        ) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/remediation/approvals", response_model=ApprovalDecision)
-def record_remediation_approval(decision: ApprovalDecision) -> ApprovalDecision:
+def record_remediation_approval(request: ApprovalRequest) -> ApprovalDecision:
     """Record a human approval or rejection; it never executes routing."""
 
     try:
-        return get_control_tower().record_approval(decision)
+        return get_control_tower().record_approval(request)
     except KeyError as exc:
         raise HTTPException(
             status_code=404, detail=f"Unknown recommendation: {exc.args[0]}"
         ) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post(
+    "/remediation/approvals/{decision_id}/revoke",
+    response_model=ApprovalDecision,
+)
+def revoke_remediation_approval(
+    decision_id: str, request: ApprovalRevocationRequest
+) -> ApprovalDecision:
+    """Revoke an approved decision before any simulated change is active."""
+
+    try:
+        return get_control_tower().revoke_approval(decision_id, request)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown approval: {exc.args[0]}"
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/remediation/executions", response_model=ExecutionResult)
@@ -292,6 +331,134 @@ def request_remediation_execution(request: ExecutionRequest) -> ExecutionResult:
     """Safe contract endpoint: only dry-runs are possible in POST-01."""
 
     return get_control_tower().request_execution(request)
+
+
+@app.post("/remediation/changes", response_model=SimulatedRoutingChange)
+def apply_simulated_remediation_change(
+    request: SimulatedChangeRequest,
+) -> SimulatedRoutingChange:
+    """Apply an approved route recommendation in demo state only."""
+
+    try:
+        return get_control_tower().apply_simulated_change(request)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown recommendation: {exc.args[0]}"
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/remediation/changes/{change_id}", response_model=SimulatedRoutingChange)
+def get_simulated_remediation_change(change_id: str) -> SimulatedRoutingChange:
+    try:
+        return get_control_tower().simulated_change(change_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown change: {exc.args[0]}") from exc
+
+
+@app.get(
+    "/remediation/workflows/{recommendation_id}",
+    response_model=RoutingWorkflow,
+)
+def get_remediation_workflow(recommendation_id: str) -> RoutingWorkflow:
+    """Show the current human-approved workflow state for one recommendation."""
+
+    try:
+        return get_control_tower().workflow(recommendation_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown recommendation: {exc.args[0]}"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post(
+    "/remediation/changes/{change_id}/rollback",
+    response_model=SimulatedRoutingChange,
+)
+def rollback_simulated_remediation_change(
+    change_id: str, request: SimulatedChangeRollbackRequest
+) -> SimulatedRoutingChange:
+    try:
+        return get_control_tower().rollback_simulated_change(change_id, request)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown change: {exc.args[0]}"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post(
+    "/remediation/changes/{change_id}/complete",
+    response_model=SimulatedRoutingChange,
+)
+def complete_simulated_remediation_change(
+    change_id: str, request: SimulatedChangeCompletionRequest
+) -> SimulatedRoutingChange:
+    """Close a healthy simulated rollout after a human review."""
+
+    try:
+        return get_control_tower().complete_simulated_change(change_id, request)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown change: {exc.args[0]}"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/remediation/audit", response_model=list[RemediationAuditEvent])
+def remediation_audit(recommendation_id: str | None = None) -> list[RemediationAuditEvent]:
+    """Expose the local audit trail for the human-approved demo workflow."""
+
+    return get_control_tower().remediation_audit(recommendation_id)
+
+
+@app.get("/alerts", response_model=list[Alert])
+def list_alerts(acknowledged: bool | None = None) -> list[Alert]:
+    """List the local operator inbox; external notification delivery is absent."""
+
+    return get_control_tower().alerts(acknowledged)
+
+
+@app.post("/alerts/{alert_id}/acknowledge", response_model=Alert)
+def acknowledge_alert(alert_id: str, request: AlertAcknowledgeRequest) -> Alert:
+    try:
+        return get_control_tower().acknowledge_alert(alert_id, request.acknowledged_by)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown alert: {exc.args[0]}") from exc
+
+
+@app.get("/incidents/{incident_id}/similar-cases", response_model=list[SimilarIncident])
+def similar_incident_cases(incident_id: str) -> list[SimilarIncident]:
+    try:
+        return get_control_tower().similar_incidents(incident_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown incident: {exc.args[0]}") from exc
+
+
+@app.post("/incidents/{incident_id}/post-incident-report", response_model=PostIncidentReport)
+def generate_post_incident_report(incident_id: str) -> PostIncidentReport:
+    try:
+        return get_control_tower().generate_post_incident_report(incident_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown incident: {exc.args[0]}") from exc
+
+
+@app.get("/incidents/{incident_id}/post-incident-report", response_model=PostIncidentReport)
+def get_post_incident_report(incident_id: str) -> PostIncidentReport:
+    try:
+        return get_control_tower().post_incident_report(incident_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No persisted report for incident: {exc.args[0]}",
+        ) from exc
 
 
 @app.get(
@@ -317,5 +484,3 @@ def analyze(request: AnalysisRequest) -> AnalysisResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except AgentError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    ExecutionRequest,
-    ExecutionResult,

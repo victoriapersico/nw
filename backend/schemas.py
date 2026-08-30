@@ -17,8 +17,21 @@ TransactionStatus = Literal["approved", "declined"]
 Severity = Literal["low", "medium", "high", "critical"]
 IncidentStatus = Literal["active", "resolved"]
 DiagnosisStatus = Literal["confirmed", "insufficient_evidence"]
+# Narrative controls belong to the diagnosis service.  They are kept here so
+# the LLM integration remains available in this branch without surfacing it in
+# the dashboard UI.
 NarrativeLanguage = Literal["en", "es"]
 NarrativeTone = Literal["operations", "executive"]
+AlertType = Literal["incident_detected", "approval_required", "rollback_triggered"]
+IncidentOutcome = Literal[
+    "open",
+    "approved",
+    "rejected",
+    "expired",
+    "revoked",
+    "rolled_back",
+    "completed",
+]
 EvidenceDimension = Literal[
     "merchant",
     "country",
@@ -95,8 +108,8 @@ class Incident(BaseModel):
     actual_conversion: float = Field(ge=0, le=1)
     conversion_drop_pp: float = Field(ge=0, le=100)
     affected_volume: int = Field(ge=0)
-    estimated_loss: float = Field(ge=0)
-    estimated_loss_per_hour: float = Field(ge=0)
+    estimated_loss: float = Field(default=0, ge=0)
+    estimated_loss_per_hour: float = Field(default=0, ge=0)
     severity: Severity
     anomaly_score: float
     status: IncidentStatus = "active"
@@ -128,8 +141,6 @@ class Diagnosis(BaseModel):
     diagnosis_status: DiagnosisStatus
     explanation: str = Field(min_length=1, max_length=2_000)
     recommended_action: str = Field(min_length=1, max_length=1_000)
-    executive_summary: str | None = Field(default=None, min_length=1, max_length=300)
-    evidence_citations: list[str] = Field(default_factory=list)
 
 
 class InjectionConfig(BaseModel):
@@ -286,23 +297,50 @@ class RoutingRecommendation(BaseModel):
     recommended_option_id: str | None = Field(default=None, max_length=128)
     alternatives: list[SimulationResult] = Field(default_factory=list)
     rationale: str = Field(min_length=1, max_length=1_000)
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    proposed_traffic_cap: float | None = Field(default=None, gt=0, le=1)
+    abstention_reason: str | None = Field(default=None, max_length=1_000)
     rollback_condition: str | None = Field(default=None, max_length=1_000)
     rollback_reference: str | None = Field(default=None, max_length=128)
     required_approval: Literal["merchant_operations"] = "merchant_operations"
     dry_run: Literal[True] = True
 
 
-class ApprovalDecision(BaseModel):
-    """Human decision recorded before an execution request can be considered."""
+class ApprovalRequest(BaseModel):
+    """Human input for a recommendation; linked evidence is derived server-side."""
 
     model_config = ConfigDict(extra="forbid")
 
     decision_id: str = Field(min_length=1, max_length=128)
     recommendation_id: str = Field(min_length=1, max_length=128)
+    merchant: Merchant
     decision: Literal["approved", "rejected"]
     decided_by: str = Field(min_length=1, max_length=128)
     decided_at: datetime
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    expires_at: datetime | None = None
     note: str | None = Field(default=None, max_length=1_000)
+
+
+class ApprovalDecision(ApprovalRequest):
+    """Immutable approval record with the reviewed evidence snapshot."""
+
+    merchant: Merchant
+    incident_id: str = Field(min_length=1, max_length=128)
+    simulation_option_id: str | None = Field(default=None, max_length=128)
+    reviewed_simulation: SimulationResult | None = None
+    reviewed_evidence: list[EvidenceItem] = Field(default_factory=list)
+    status: Literal["approved", "rejected", "expired", "revoked"]
+
+
+class ApprovalRevocationRequest(BaseModel):
+    """Human revocation before a simulated change has started."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    revoked_by: str = Field(min_length=1, max_length=128)
+    merchant: Merchant
+    reason: str = Field(min_length=1, max_length=1_000)
 
 
 class ExecutionRequest(BaseModel):
@@ -330,6 +368,119 @@ class ExecutionResult(BaseModel):
     reason: str = Field(min_length=1, max_length=1_000)
 
 
+class SimulatedChangeRequest(BaseModel):
+    """Activate an approved recommendation in the local simulator only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recommendation_id: str = Field(min_length=1, max_length=128)
+    approval_decision_id: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    rollback_reference: str = Field(min_length=1, max_length=128)
+
+
+class RemediationMonitoringWindow(BaseModel):
+    """Observed health of the proposed target route in one simulator window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    window_start: datetime
+    window_end: datetime
+    attempted_transactions: int = Field(ge=0)
+    approval_rate: float | None = Field(default=None, ge=0, le=1)
+    error_rate: float | None = Field(default=None, ge=0, le=1)
+    below_rollback_threshold: bool = False
+
+
+class SimulatedRoutingChange(BaseModel):
+    """An auditable, non-provider-routing representation of an approved change."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    change_id: str = Field(min_length=1, max_length=128)
+    recommendation_id: str = Field(min_length=1, max_length=128)
+    approval_decision_id: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    merchant: Merchant
+    country: Country
+    target_provider: Provider
+    traffic_shift_pct: float = Field(gt=0, le=1)
+    before_approval_rate: float = Field(ge=0, le=1)
+    expected_approval_rate: float | None = Field(default=None, ge=0, le=1)
+    expected_recovered_value_per_hour: float = Field(ge=0)
+    status: Literal["simulated_active", "rolled_back", "completed"]
+    applied_at: datetime
+    rollback_reference: str = Field(min_length=1, max_length=128)
+    rollback_reason: str | None = Field(default=None, max_length=1_000)
+    monitoring: list[RemediationMonitoringWindow] = Field(default_factory=list)
+    simulated: Literal[True] = True
+
+
+class SimulatedChangeRollbackRequest(BaseModel):
+    """Human-initiated rollback for a simulated routing change."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decided_by: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=1_000)
+
+
+class SimulatedChangeCompletionRequest(BaseModel):
+    """Human closes a healthy simulated rollout without any provider action."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decided_by: str = Field(min_length=1, max_length=128)
+    note: str = Field(min_length=1, max_length=1_000)
+
+
+class RoutingWorkflow(BaseModel):
+    """Single source of truth for the human-approved remediation lifecycle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recommendation_id: str = Field(min_length=1, max_length=128)
+    incident_id: str = Field(min_length=1, max_length=128)
+    status: Literal[
+        "pending_approval",
+        "approved",
+        "rejected",
+        "expired",
+        "revoked",
+        "simulated_active",
+        "rolled_back",
+        "completed",
+    ]
+    approval_decision_id: str | None = Field(default=None, max_length=128)
+    change_id: str | None = Field(default=None, max_length=128)
+    updated_at: datetime
+    transition_reason: str = Field(min_length=1, max_length=1_000)
+
+
+class RemediationAuditEvent(BaseModel):
+    """Append-only in-memory audit entry for the safe demo workflow."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str = Field(min_length=1, max_length=128)
+    occurred_at: datetime
+    event_type: Literal[
+        "recommendation_created",
+        "approval_recorded",
+        "approval_revoked",
+        "approval_expired",
+        "simulated_change_applied",
+        "target_route_monitored",
+        "simulated_change_rolled_back",
+        "simulated_change_completed",
+    ]
+    recommendation_id: str = Field(min_length=1, max_length=128)
+    change_id: str | None = Field(default=None, max_length=128)
+    actor: str = Field(min_length=1, max_length=128)
+    detail: str = Field(min_length=1, max_length=1_000)
+    recommendation: RoutingRecommendation | None = None
+
+
 # Backward-compatible names used by the first POST-01 implementation.
 RemediationSimulation = SimulationResult
 RemediationProposal = RoutingRecommendation
@@ -343,6 +494,122 @@ class DiagnosedIncident(BaseModel):
     incident: Incident
     diagnosis: Diagnosis
     remediation: RoutingRecommendation | None = None
+
+
+class DeclineCodePatternEntry(BaseModel):
+    """One code in a normalized, deterministic decline pattern."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: DeclineCode
+    decline_count: int = Field(ge=1)
+
+
+class IncidentFingerprint(BaseModel):
+    """Exact-match key used for the local incident memory; never embeddings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    merchant: Merchant
+    country: Country
+    provider: Provider | None = None
+    payment_method: PaymentMethod | None = None
+    decline_pattern: list[DeclineCodePatternEntry] = Field(default_factory=list)
+
+
+class IncidentMemoryCase(BaseModel):
+    """Persistent evidence and outcome snapshots for one detected incident."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    incident: Incident
+    diagnosis: Diagnosis
+    remediation: RoutingRecommendation | None = None
+    fingerprint: IncidentFingerprint
+    decision: ApprovalDecision | None = None
+    change: SimulatedRoutingChange | None = None
+
+
+class IncidentMonitoringOutcome(BaseModel):
+    """Expected versus observed result persisted for a simulated response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal[
+        "not_simulated", "simulated_active", "rolled_back", "completed"
+    ] = "not_simulated"
+    expected_approval_rate: float | None = Field(default=None, ge=0, le=1)
+    observed_approval_rate: float | None = Field(default=None, ge=0, le=1)
+    observed_windows: int = Field(default=0, ge=0)
+    observed_attempts: int = Field(default=0, ge=0)
+    rollback_reason: str | None = Field(default=None, max_length=1_000)
+
+
+class SimilarIncident(BaseModel):
+    """A prior exact match with the facts needed for operator context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: str = Field(min_length=1, max_length=128)
+    detected_at: datetime
+    severity: Severity
+    estimated_loss: float = Field(ge=0)
+    estimated_loss_per_hour: float = Field(ge=0)
+    recommendation: RoutingRecommendation | None = None
+    decision: ApprovalDecision | None = None
+    monitoring_outcome: IncidentMonitoringOutcome = Field(
+        default_factory=IncidentMonitoringOutcome
+    )
+    outcome: IncidentOutcome
+
+
+class Alert(BaseModel):
+    """A local operator notification; delivery integrations are intentionally absent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    alert_id: str = Field(min_length=1, max_length=128)
+    type: AlertType
+    created_at: datetime
+    incident_id: str | None = Field(default=None, max_length=128)
+    recommendation_id: str | None = Field(default=None, max_length=128)
+    change_id: str | None = Field(default=None, max_length=128)
+    acknowledged: bool = False
+    acknowledged_at: datetime | None = None
+    acknowledged_by: str | None = Field(default=None, max_length=128)
+    payload: dict[str, object] = Field(default_factory=dict)
+
+
+class AlertAcknowledgeRequest(BaseModel):
+    """Human acknowledgement for a local inbox item."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    acknowledged_by: str = Field(min_length=1, max_length=128)
+
+
+class PostIncidentReport(BaseModel):
+    """Evidence-bound report assembled entirely from persisted snapshots."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    report_id: str = Field(min_length=1, max_length=128)
+    incident_id: str = Field(min_length=1, max_length=128)
+    generated_at: datetime
+    summary: str = Field(min_length=1, max_length=2_000)
+    incident: Incident | None = None
+    diagnosis: Diagnosis | None = None
+    recommendation: RoutingRecommendation | None = None
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    decision: ApprovalDecision | None = None
+    change: SimulatedRoutingChange | None = None
+    outcome: IncidentOutcome = "open"
+    monitoring_outcome: IncidentMonitoringOutcome = Field(
+        default_factory=IncidentMonitoringOutcome
+    )
+    recurrence_detected: bool = False
+    audit_trail: list[RemediationAuditEvent] = Field(default_factory=list)
+    similar_cases: list[SimilarIncident] = Field(default_factory=list)
 
 
 class MerchantIncidentsResponse(BaseModel):
