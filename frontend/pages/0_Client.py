@@ -1066,22 +1066,40 @@ if live_incidents is not None:
             "decline_code": "Decline code",
             "intersection": "Intersection",
         }
+        diagnosis_confirmed = diagnosis["diagnosis_status"] == "confirmed"
+        displayed_evidence = (
+            [
+                item
+                for item in evidence
+                if item["dimension"] in diagnosis["root_cause_dimensions"]
+            ]
+            if diagnosis_confirmed
+            else evidence
+        )
+        grouped_evidence: dict[str, list[str]] = {}
+        for item in displayed_evidence:
+            label = dimension_labels[item["dimension"]]
+            values = grouped_evidence.setdefault(label, [])
+            if item["value"] not in values:
+                values.append(item["value"])
         root_cause = {"Country": raw_incident["country"]}
-        for item in evidence:
-            # Evidence arrives ranked. Keep the strongest value for each
-            # dimension instead of replacing it with a weaker secondary slice.
-            root_cause.setdefault(
-                dimension_labels[item["dimension"]], item["value"]
-            )
+        root_cause.update(
+            {label: "; ".join(values) for label, values in grouped_evidence.items()}
+        )
 
         headline_evidence = [
             item
-            for item in evidence
+            for item in displayed_evidence
             if item["dimension"] in {"provider", "payment_method", "issuing_bank"}
         ][:2]
         affected_slice = " · ".join(
             item["value"] for item in headline_evidence
         ) or "payment traffic"
+        incident_title = (
+            f"{affected_slice} approval degradation"
+            if diagnosis_confirmed
+            else f"Approval degradation under investigation — {raw_incident['country']}"
+        )
 
         data["incident"] = {
             "incident_id": raw_incident["incident_id"],
@@ -1089,10 +1107,19 @@ if live_incidents is not None:
             "estimated_loss": raw_incident["estimated_loss"],
             "severity": raw_incident["severity"].title(),
             "country": raw_incident["country"],
-            "title": f"{affected_slice} approval degradation",
+            "title": incident_title,
             "root_cause": root_cause,
             "diagnosis_status": diagnosis["diagnosis_status"],
             "diagnosis": diagnosis["explanation"],
+            "executive_summary": diagnosis.get("executive_summary"),
+            "evidence_citations": diagnosis.get("evidence_citations", []),
+            "evidence_citation_labels": {
+                f"evidence-{index}": (
+                    f"{dimension_labels[item['dimension']]}: {item['value']} "
+                    f"({item['baseline_metric']:.1%} → {item['live_metric']:.1%})"
+                )
+                for index, item in enumerate(evidence, start=1)
+            },
             "diagnosis_points": [
                 (
                     f"{dimension_labels[item['dimension']]}: "
@@ -1516,10 +1543,17 @@ st.markdown("### Root cause, recommended recovery & simulation")
 if incident is None:
     st.success("There are no active incidents to simulate.", icon="✅")
 else:
+    if incident.get("executive_summary"):
+        st.info(incident["executive_summary"], icon="📌")
+    diagnosis_confirmed = incident.get("diagnosis_status") == "confirmed"
     evidence_column, simulation_column = st.columns((1, 1.45))
     with evidence_column:
         with st.container(border=True):
-            st.markdown("#### Why is approval falling?")
+            st.markdown(
+                "#### Confirmed root cause"
+                if diagnosis_confirmed
+                else "#### Evidence under review"
+            )
             root_cause_items = "".join(
                 f"<div class='cause-item'><div class='cause-label'>{label}</div>"
                 f"<div class='cause-value'>{value}</div></div>"
@@ -1529,9 +1563,20 @@ else:
                 f"<div class='root-cause-grid'>{root_cause_items}</div>",
                 unsafe_allow_html=True,
             )
+            st.markdown("##### Operations assessment")
+            st.write(incident["diagnosis"])
             for point in incident["diagnosis_points"]:
                 st.markdown(f"- {point}")
             st.caption(f"Evidence confidence: {incident['confidence']:.0%}")
+            if incident.get("evidence_citations"):
+                citation_labels = incident["evidence_citation_labels"]
+                st.caption(
+                    "Evidence citations: "
+                    + "; ".join(
+                        citation_labels.get(citation, citation)
+                        for citation in incident["evidence_citations"]
+                    )
+                )
 
     if incident.get("incident_id"):
         with simulation_column:
