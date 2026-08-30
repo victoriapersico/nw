@@ -1128,3 +1128,37 @@ new synthetic scenarios to avoid turning truly ambiguous incidents into false ce
 ### Revisit
 Recalibrate or replace these thresholds when a larger labeled incident dataset is
 available, or if evaluation false-positive/abstention metrics regress.
+
+## DEC-044 — Close the hackathon MVP around three local demo surfaces
+
+### Alternatives considered
+1. Keep adding partner integrations and automation before the demo.
+2. Present only the merchant Control Tower and leave API operations implicit.
+3. Close scope with a local Control Tower, a separate local Yuno API Manager,
+   interactive FastAPI documentation, and optional read-only Telegram alerts.
+
+### Decision
+Use option 3. `start_demo.ps1` launches the local FastAPI service, the merchant
+Control Tower, and the Yuno API Manager as separate Streamlit surfaces against
+the same API. The Yuno screen uses synthetic sandbox telemetry, local alert and
+email previews, and never contacts Yuno. Telegram may send a best-effort
+incident notification with an HTTPS link to Control Tower, but approval,
+rejection, simulation, and rollback remain dashboard-only human actions.
+
+### Why
+- Gives the pitch a complete operations narrative without conflating partner
+  API failures with merchant payment incidents.
+- Keeps the deterministic incident, diagnosis, simulation, approval, audit, and
+  rollback happy path reliable for a live demo.
+- Makes the operational boundary explicit: no production routing, payment,
+  email, webhook delivery, or Telegram action is performed.
+
+### Tradeoff
+The API Manager is a local sandbox rather than a live Yuno integration, and
+Telegram delivery depends on local network access and a configured public HTTPS
+dashboard URL.
+
+### Revisit
+After the hackathon, replace synthetic partner telemetry with an approved Yuno
+contract, add durable operational storage and authentication, and evaluate any
+actionable messaging only with explicit authorization and rollback controls.
