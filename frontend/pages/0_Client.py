@@ -56,29 +56,23 @@ def fetch_merchant_incidents(
 def select_display_incident(
     incidents: list[dict[str, Any]], merchant: str
 ) -> dict[str, Any]:
-    """Prefer the Judge Lab's latest matching country without exposing it to detection."""
+    """Show the latest detected incident, preferring the Judge Lab's exact ID."""
 
     latest_injection = st.session_state.get("last_injection")
     if latest_injection and latest_injection.get("merchant") == merchant:
-        matching_country = [
-            item
-            for item in incidents
-            if item["incident"]["country"] == latest_injection.get("country")
-        ]
-        if matching_country:
-            return max(
-                matching_country,
-                key=lambda item: item["incident"]["detected_at"],
-            )
+        detected_incident_id = latest_injection.get("detected_incident_id")
+        matching_incident = next(
+            (
+                item
+                for item in incidents
+                if item["incident"]["incident_id"] == detected_incident_id
+            ),
+            None,
+        )
+        if matching_incident is not None:
+            return matching_incident
 
-    return next(
-        (
-            item
-            for item in incidents
-            if (item.get("remediation") or {}).get("status") == "recommended"
-        ),
-        incidents[0],
-    )
+    return max(incidents, key=lambda item: item["incident"]["detected_at"])
 
 
 def advance_and_fetch_monitoring(merchant: str) -> dict[str, Any] | None:
@@ -1145,13 +1139,18 @@ with st.popover("Judge Lab"):
             response.raise_for_status()
             result = response.json()
             incidents_after_injection = fetch_merchant_incidents(lab_merchant) or []
-            detected_incident = next(
-                (
-                    item
-                    for item in incidents_after_injection
-                    if item["incident"]["country"] == lab_country
-                ),
-                None,
+            matching_incidents = [
+                item
+                for item in incidents_after_injection
+                if item["incident"]["country"] == lab_country
+            ]
+            detected_incident = (
+                max(
+                    matching_incidents,
+                    key=lambda item: item["incident"]["detected_at"],
+                )
+                if matching_incidents
+                else None
             )
 
             st.session_state["last_injection"] = {
