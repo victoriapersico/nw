@@ -69,8 +69,115 @@ def test_incident_alerts_are_acknowledgeable_and_report_is_persisted() -> None:
         report = client.post(f"/incidents/{incident_id}/post-incident-report")
         report.raise_for_status()
         assert report.json()["incident_id"] == incident_id
+        assert report.json()["incident"]["estimated_loss"] >= 0
+        assert report.json()["recommendation"] is not None
+        assert report.json()["outcome"] == "open"
+        assert report.json()["monitoring_outcome"]["status"] == "not_simulated"
         assert report.json()["evidence"]
         assert client.get(f"/incidents/{incident_id}/post-incident-report").json() == report.json()
+
+
+def test_terminal_report_persists_decision_monitoring_and_recurrence() -> None:
+    with TestClient(app) as client:
+        incident_id = _inject_same_failure(client)
+        diagnosed = next(
+            item
+            for item in client.get("/merchants/Rappi/incidents").json()["incidents"]
+            if item["incident"]["incident_id"] == incident_id
+        )
+        recommendation = diagnosed["remediation"]
+        assert recommendation is not None
+
+        decision_id = "approval-incident-memory-001"
+        approval = client.post(
+            "/remediation/approvals",
+            json={
+                "decision_id": decision_id,
+                "recommendation_id": recommendation["recommendation_id"],
+                "merchant": "Rappi",
+                "decision": "approved",
+                "decided_by": "merchant-operator",
+                "decided_at": datetime.now(timezone.utc).isoformat(),
+                "idempotency_key": "approve-incident-memory-001",
+            },
+        )
+        approval.raise_for_status()
+
+        change = client.post(
+            "/remediation/changes",
+            json={
+                "recommendation_id": recommendation["recommendation_id"],
+                "approval_decision_id": decision_id,
+                "idempotency_key": "change-incident-memory-001",
+                "rollback_reference": recommendation["rollback_reference"],
+            },
+        )
+        change.raise_for_status()
+        client.post("/monitor/tick").raise_for_status()
+        completed = client.post(
+            f"/remediation/changes/{change.json()['change_id']}/complete",
+            json={
+                "decided_by": "merchant-operator",
+                "note": "Monitoring matched the expected simulated outcome.",
+            },
+        )
+        completed.raise_for_status()
+
+        report_response = client.get(
+            f"/incidents/{incident_id}/post-incident-report"
+        )
+        report_response.raise_for_status()
+        report = report_response.json()
+        assert report["outcome"] == "completed"
+        assert report["incident"]["estimated_loss_per_hour"] > 0
+        assert report["recommendation"]["recommendation_id"] == recommendation[
+            "recommendation_id"
+        ]
+        assert report["decision"]["status"] == "approved"
+        assert report["change"]["status"] == "completed"
+        assert report["monitoring_outcome"]["status"] == "completed"
+        assert report["monitoring_outcome"]["observed_windows"] >= 1
+        assert report["monitoring_outcome"]["observed_attempts"] > 0
+        assert report["monitoring_outcome"]["observed_approval_rate"] is not None
+        assert "Estimated loss" in report["summary"]
+        assert "Human decision" in report["summary"]
+        report_id = report["report_id"]
+
+        regenerated = client.post(
+            f"/incidents/{incident_id}/post-incident-report"
+        )
+        regenerated.raise_for_status()
+        assert regenerated.json()["report_id"] == report_id
+
+    get_control_tower.cache_clear()
+    with TestClient(app) as restarted_client:
+        persisted = restarted_client.get(
+            f"/incidents/{incident_id}/post-incident-report"
+        )
+        persisted.raise_for_status()
+        assert persisted.json()["report_id"] == report_id
+        assert persisted.json()["monitoring_outcome"]["status"] == "completed"
+
+        restarted_client.post("/monitor/tick").raise_for_status()
+        repeated_incident_id = _inject_same_failure(restarted_client)
+        assert repeated_incident_id != incident_id
+        similar_response = restarted_client.get(
+            f"/incidents/{repeated_incident_id}/similar-cases"
+        )
+        similar_response.raise_for_status()
+        prior = next(
+            item
+            for item in similar_response.json()
+            if item["incident_id"] == incident_id
+        )
+        assert prior["estimated_loss_per_hour"] > 0
+        assert prior["recommendation"]["recommendation_id"] == recommendation[
+            "recommendation_id"
+        ]
+        assert prior["decision"]["status"] == "approved"
+        assert prior["monitoring_outcome"]["status"] == "completed"
+        assert prior["monitoring_outcome"]["observed_windows"] >= 1
+        assert prior["outcome"] == "completed"
 
 
 def test_memory_returns_only_exact_deterministic_fingerprint_matches(tmp_path) -> None:

@@ -18,6 +18,15 @@ Severity = Literal["low", "medium", "high", "critical"]
 IncidentStatus = Literal["active", "resolved"]
 DiagnosisStatus = Literal["confirmed", "insufficient_evidence"]
 AlertType = Literal["incident_detected", "approval_required", "rollback_triggered"]
+IncidentOutcome = Literal[
+    "open",
+    "approved",
+    "rejected",
+    "expired",
+    "revoked",
+    "rolled_back",
+    "completed",
+]
 EvidenceDimension = Literal[
     "merchant",
     "country",
@@ -94,8 +103,8 @@ class Incident(BaseModel):
     actual_conversion: float = Field(ge=0, le=1)
     conversion_drop_pp: float = Field(ge=0, le=100)
     affected_volume: int = Field(ge=0)
-    estimated_loss: float = Field(ge=0)
-    estimated_loss_per_hour: float = Field(ge=0)
+    estimated_loss: float = Field(default=0, ge=0)
+    estimated_loss_per_hour: float = Field(default=0, ge=0)
     severity: Severity
     anomaly_score: float
     status: IncidentStatus = "active"
@@ -516,15 +525,37 @@ class IncidentMemoryCase(BaseModel):
     change: SimulatedRoutingChange | None = None
 
 
+class IncidentMonitoringOutcome(BaseModel):
+    """Expected versus observed result persisted for a simulated response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal[
+        "not_simulated", "simulated_active", "rolled_back", "completed"
+    ] = "not_simulated"
+    expected_approval_rate: float | None = Field(default=None, ge=0, le=1)
+    observed_approval_rate: float | None = Field(default=None, ge=0, le=1)
+    observed_windows: int = Field(default=0, ge=0)
+    observed_attempts: int = Field(default=0, ge=0)
+    rollback_reason: str | None = Field(default=None, max_length=1_000)
+
+
 class SimilarIncident(BaseModel):
-    """A prior exact deterministic fingerprint match."""
+    """A prior exact match with the facts needed for operator context."""
 
     model_config = ConfigDict(extra="forbid")
 
     incident_id: str = Field(min_length=1, max_length=128)
     detected_at: datetime
     severity: Severity
-    outcome: Literal["open", "approved", "rejected", "rolled_back", "completed"]
+    estimated_loss: float = Field(ge=0)
+    estimated_loss_per_hour: float = Field(ge=0)
+    recommendation: RoutingRecommendation | None = None
+    decision: ApprovalDecision | None = None
+    monitoring_outcome: IncidentMonitoringOutcome = Field(
+        default_factory=IncidentMonitoringOutcome
+    )
+    outcome: IncidentOutcome
 
 
 class Alert(BaseModel):
@@ -561,9 +592,17 @@ class PostIncidentReport(BaseModel):
     incident_id: str = Field(min_length=1, max_length=128)
     generated_at: datetime
     summary: str = Field(min_length=1, max_length=2_000)
+    incident: Incident | None = None
+    diagnosis: Diagnosis | None = None
+    recommendation: RoutingRecommendation | None = None
     evidence: list[EvidenceItem] = Field(default_factory=list)
     decision: ApprovalDecision | None = None
     change: SimulatedRoutingChange | None = None
+    outcome: IncidentOutcome = "open"
+    monitoring_outcome: IncidentMonitoringOutcome = Field(
+        default_factory=IncidentMonitoringOutcome
+    )
+    recurrence_detected: bool = False
     audit_trail: list[RemediationAuditEvent] = Field(default_factory=list)
     similar_cases: list[SimilarIncident] = Field(default_factory=list)
 
