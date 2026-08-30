@@ -1,6 +1,7 @@
 
 """Stateful live Control Tower orchestration for the FastAPI demo."""
 
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from threading import RLock
 from uuid import uuid4
@@ -21,8 +22,14 @@ from backend.schemas import (
     InjectionConfig,
     LiveTickResponse,
     Merchant,
+    CountryMonitoringMetric,
+    MerchantMonitoringResponse,
     MerchantIncidentsResponse,
+    TransactionBatch,
 )
+
+
+LIVE_CHART_WINDOWS = 24
 
 
 class LiveControlTower:
@@ -32,6 +39,10 @@ class LiveControlTower:
         self._runtime = runtime
         self._lock = RLock()
         self._incidents: dict[str, DiagnosedIncident] = {}
+        self._latest_batch: TransactionBatch | None = None
+        self._approval_history: dict[tuple[str, str], deque[float]] = defaultdict(
+            lambda: deque(maxlen=LIVE_CHART_WINDOWS)
+        )
 
     def inject(self, config: InjectionConfig) -> str:
         """Apply an injection only to the simulator, then advance two
@@ -74,8 +85,82 @@ class LiveControlTower:
                 incidents=incidents,
             )
 
+    def monitoring_for(self, merchant: Merchant) -> MerchantMonitoringResponse:
+        """Return measured simulator metrics for the latest live window."""
+
+        with self._lock:
+            if self._latest_batch is None:
+                self._advance_locked()
+            assert self._latest_batch is not None
+            batch = self._latest_batch
+            countries: list[CountryMonitoringMetric] = []
+            total_attempts = 0
+            total_approved = 0
+            total_expected_approved = 0.0
+
+            for country in ("Mexico", "Brazil", "Colombia"):
+                transactions = [
+                    transaction
+                    for transaction in batch.transactions
+                    if transaction.merchant == merchant and transaction.country == country
+                ]
+                attempts = len(transactions)
+                if not attempts:
+                    continue
+                approved = sum(
+                    transaction.status == "approved" for transaction in transactions
+                )
+                actual_rate = approved / attempts
+                expected_rate = self._runtime.expected_approval_rate(
+                    merchant,
+                    country,
+                    batch.window_start,
+                )
+                expected_rate = actual_rate if expected_rate is None else expected_rate
+                history = self._approval_history[(merchant, country)]
+                countries.append(
+                    CountryMonitoringMetric(
+                        country=country,
+                        actual_approval_rate=actual_rate,
+                        expected_approval_rate=expected_rate,
+                        attempted_transactions=attempts,
+                        approval_history=list(history),
+                    )
+                )
+                total_attempts += attempts
+                total_approved += approved
+                total_expected_approved += expected_rate * attempts
+
+            return MerchantMonitoringResponse(
+                merchant=merchant,
+                window_start=batch.window_start,
+                window_end=batch.window_end,
+                actual_approval_rate=total_approved / total_attempts,
+                expected_approval_rate=total_expected_approved / total_attempts,
+                attempted_transactions=total_attempts,
+                countries=countries,
+            )
+
     def _advance_locked(self) -> LiveTickResponse:
         batch = self._runtime.next_batch()
+        self._latest_batch = batch
+        for transaction in batch.transactions:
+            key = (transaction.merchant, transaction.country)
+            # Count once per country after the whole batch is available below.
+            self._approval_history.setdefault(key, deque(maxlen=LIVE_CHART_WINDOWS))
+
+        for merchant in ("Rappi", "Carrefour", "Despegar"):
+            for country in ("Mexico", "Brazil", "Colombia"):
+                outcomes = [
+                    transaction.status == "approved"
+                    for transaction in batch.transactions
+                    if transaction.merchant == merchant and transaction.country == country
+                ]
+                if outcomes:
+                    history = self._approval_history[(merchant, country)]
+                    if len(history) >= LIVE_CHART_WINDOWS:
+                        history.clear()
+                    history.append(sum(outcomes) / len(outcomes))
         detection = self._runtime.detect(DetectionRequest(batch=batch))
 
         diagnosed_incidents = []
