@@ -1,8 +1,10 @@
-"""OpenAI-assisted prioritization over deterministic routing simulations.
+"""OpenAI-assisted explanation of a deterministic routing selection.
 
-The model may select an eligible option and explain it. All numeric fields in
-the public recommendation are copied from the selected SimulationResult.
-This module has no approval, execution, provider-credential, or routing tools.
+Application rules rank and select the eligible option before the model runs.
+The model may explain that selection or abstain, but cannot select a route. All
+numeric fields in the public recommendation are copied from the deterministically
+selected SimulationResult. This module has no approval, execution,
+provider-credential, or routing tools.
 """
 
 from __future__ import annotations
@@ -36,37 +38,36 @@ class RoutingRecommendationError(RuntimeError):
     """Raised when OpenAI cannot return a safe, grounded recommendation."""
 
 
-class _RoutingDecision(BaseModel):
-    """Fields OpenAI may author; deterministic metrics are intentionally absent."""
+class _RoutingExplanation(BaseModel):
+    """Qualitative fields OpenAI may author after deterministic selection."""
 
     model_config = ConfigDict(extra="forbid")
 
     status: Literal["recommended", "not_recommended"]
-    recommended_option_id: str | None = Field(default=None, max_length=128)
     rationale: str = Field(min_length=1, max_length=1_000)
     abstention_reason: str | None = Field(default=None, max_length=1_000)
 
     @model_validator(mode="after")
-    def validate_decision_shape(self) -> "_RoutingDecision":
+    def validate_explanation_shape(self) -> "_RoutingExplanation":
         if self.status == "recommended":
-            if self.recommended_option_id is None:
-                raise ValueError("recommended decisions require an option_id")
             if self.abstention_reason is not None:
-                raise ValueError("recommended decisions cannot include abstention_reason")
+                raise ValueError(
+                    "recommended explanations cannot include abstention_reason"
+                )
         else:
-            if self.recommended_option_id is not None:
-                raise ValueError("not_recommended decisions cannot select an option")
             if self.abstention_reason is None:
-                raise ValueError("not_recommended decisions require abstention_reason")
+                raise ValueError(
+                    "not_recommended explanations require abstention_reason"
+                )
         return self
 
 
-def _validate_model_wording(decision: _RoutingDecision) -> None:
+def _validate_model_wording(explanation: _RoutingExplanation) -> None:
     """Keep model-authored prose qualitative; metrics are rendered locally."""
 
     wording = " ".join(
         item
-        for item in (decision.rationale, decision.abstention_reason)
+        for item in (explanation.rationale, explanation.abstention_reason)
         if item is not None
     )
     if re.search(r"\d|[$€£]", wording):
@@ -127,33 +128,40 @@ def _abstain(
     )
 
 
-def _mock_decision(eligible: Sequence[SimulationResult]) -> _RoutingDecision:
-    """Mirror the demo's deterministic confidence-adjusted prioritization."""
+def _rank_eligible_options(
+    eligible: Sequence[SimulationResult],
+) -> list[SimulationResult]:
+    """Rank eligible options using stable application-owned rules."""
 
-    selected = max(
+    return sorted(
         eligible,
         key=lambda item: (
-            item.expected_recovered_value_per_hour * item.confidence,
-            -item.option.traffic_shift_pct,
+            -(item.expected_recovered_value_per_hour * item.confidence),
+            item.option.traffic_shift_pct,
             item.option.target_provider,
+            item.option.option_id,
         ),
     )
-    return _RoutingDecision(
+
+
+def _mock_explanation(selected: SimulationResult) -> _RoutingExplanation:
+    """Explain the deterministic selection without invoking OpenAI."""
+
+    return _RoutingExplanation(
         status="recommended",
-        recommended_option_id=selected.option.option_id,
         rationale=(
             f"{selected.option.target_provider} is the strongest policy-eligible "
-            "alternative after confidence-adjusted prioritization of the "
-            "deterministic simulation results."
+            "alternative under the deterministic confidence-adjusted ranking."
         ),
     )
 
 
-def _openai_decision(
+def _openai_explanation(
     diagnosis: Diagnosis,
     policy: RoutingPolicy,
     simulations: Sequence[SimulationResult],
-) -> _RoutingDecision:
+    selected: SimulationResult,
+) -> _RoutingExplanation:
     if settings.openai_api_key is None:
         raise RoutingRecommendationError("OPENAI_API_KEY is missing; use Mock Mode.")
 
@@ -170,8 +178,9 @@ def _openai_decision(
                 diagnosis,
                 policy,
                 simulations,
+                selected,
             ),
-            text_format=_RoutingDecision,
+            text_format=_RoutingExplanation,
         )
     except APIError as exc:
         raise RoutingRecommendationError(
@@ -239,28 +248,21 @@ def recommend_routing(
             ),
         )
 
-    decision = (
-        _mock_decision(eligible)
+    selected = _rank_eligible_options(eligible)[0]
+    explanation = (
+        _mock_explanation(selected)
         if use_mock
-        else _openai_decision(diagnosis, policy, simulations)
+        else _openai_explanation(diagnosis, policy, simulations, selected)
     )
-    _validate_model_wording(decision)
-    if decision.status == "not_recommended":
-        assert decision.abstention_reason is not None
+    _validate_model_wording(explanation)
+    if explanation.status == "not_recommended":
+        assert explanation.abstention_reason is not None
         return _abstain(
             diagnosis,
             policy,
             simulations,
-            reason=decision.abstention_reason,
-            rationale=decision.rationale,
-        )
-
-    by_id = {item.option.option_id: item for item in eligible}
-    selected = by_id.get(decision.recommended_option_id or "")
-    if selected is None:
-        raise RoutingRecommendationError(
-            "The recommendation selected an option that is not eligible under "
-            "the supplied simulation results and routing policy."
+            reason=explanation.abstention_reason,
+            rationale=explanation.rationale,
         )
 
     return RoutingRecommendation(
@@ -270,7 +272,7 @@ def recommend_routing(
         status="recommended",
         recommended_option_id=selected.option.option_id,
         alternatives=list(simulations),
-        rationale=decision.rationale,
+        rationale=explanation.rationale,
         confidence=selected.confidence,
         proposed_traffic_cap=selected.option.traffic_shift_pct,
         rollback_reference=f"rollback-{diagnosis.incident_id}",

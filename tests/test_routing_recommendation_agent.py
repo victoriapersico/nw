@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 import backend.ai.routing_recommendation as recommendation_module
 from backend.ai.routing_prompts import build_routing_recommendation_input
@@ -166,11 +167,12 @@ def test_policy_rejects_an_eligible_result_above_traffic_cap() -> None:
     assert "outside the eligible-route policy" in recommendation.abstention_reason
 
 
-def test_openai_cannot_select_an_unknown_or_blocked_option(monkeypatch) -> None:
-    parsed = recommendation_module._RoutingDecision(
+def test_openai_explains_the_deterministic_selection_without_choosing_it(
+    monkeypatch,
+) -> None:
+    parsed = recommendation_module._RoutingExplanation(
         status="recommended",
-        recommended_option_id="invented-provider-100",
-        rationale="Use an invented option.",
+        rationale="The selected route has the strongest grounded evidence.",
     )
     fake_client = SimpleNamespace(
         responses=SimpleNamespace(
@@ -189,19 +191,74 @@ def test_openai_cannot_select_an_unknown_or_blocked_option(monkeypatch) -> None:
         ),
     )
 
-    with pytest.raises(RoutingRecommendationError, match="not eligible"):
-        recommend_routing(
-            _diagnosis(),
-            _policy(),
-            [_simulation("stripe-25", "Stripe", 0.25)],
-            mock_mode=False,
+    simulations = [
+        _simulation("stripe-25", "Stripe", 0.25, recovered=900, confidence=0.9),
+        _simulation("adyen-25", "Adyen", 0.25, recovered=1_200, confidence=0.85),
+    ]
+    recommendation = recommend_routing(
+        _diagnosis(),
+        _policy(),
+        simulations,
+        mock_mode=False,
+    )
+
+    assert "recommended_option_id" not in recommendation_module._RoutingExplanation.model_fields
+    assert recommendation.recommended_option_id == "adyen-25"
+    assert recommendation.confidence == simulations[1].confidence
+
+
+def test_structured_explanation_rejects_a_model_authored_option_id() -> None:
+    with pytest.raises(ValidationError, match="recommended_option_id"):
+        recommendation_module._RoutingExplanation.model_validate(
+            {
+                "status": "recommended",
+                "recommended_option_id": "invented-provider-100",
+                "rationale": "Use an invented option.",
+            }
         )
 
 
+def test_openai_explanation_can_abstain_after_deterministic_selection(
+    monkeypatch,
+) -> None:
+    parsed = recommendation_module._RoutingExplanation(
+        status="not_recommended",
+        rationale="The evidence does not yet support an operational change.",
+        abstention_reason="Continue monitoring until the evidence is conclusive.",
+    )
+    fake_client = SimpleNamespace(
+        responses=SimpleNamespace(
+            parse=lambda **_kwargs: SimpleNamespace(output_parsed=parsed)
+        )
+    )
+    monkeypatch.setattr(recommendation_module, "OpenAI", lambda **_kwargs: fake_client)
+    monkeypatch.setattr(
+        recommendation_module,
+        "settings",
+        SimpleNamespace(
+            openai_api_key="test-key",
+            openai_timeout_seconds=1,
+            openai_model="test-model",
+            mock_mode=False,
+        ),
+    )
+
+    recommendation = recommend_routing(
+        _diagnosis(),
+        _policy(),
+        [_simulation("stripe-25", "Stripe", 0.25)],
+        mock_mode=False,
+    )
+
+    assert recommendation.status == "not_recommended"
+    assert recommendation.recommended_option_id is None
+    assert recommendation.proposed_traffic_cap is None
+    assert recommendation.abstention_reason == parsed.abstention_reason
+
+
 def test_model_authored_rationale_cannot_invent_numeric_recovery(monkeypatch) -> None:
-    parsed = recommendation_module._RoutingDecision(
+    parsed = recommendation_module._RoutingExplanation(
         status="recommended",
-        recommended_option_id="stripe-25",
         rationale="This route will recover $999999 per hour.",
     )
     fake_client = SimpleNamespace(
@@ -231,19 +288,23 @@ def test_model_authored_rationale_cannot_invent_numeric_recovery(monkeypatch) ->
 
 
 def test_model_input_contains_only_allowed_contracts() -> None:
+    selected = _simulation("stripe-25", "Stripe", 0.25)
     payload = json.loads(
         build_routing_recommendation_input(
             _diagnosis(),
             _policy(),
-            [_simulation("stripe-25", "Stripe", 0.25)],
+            [selected],
+            selected,
         )
     )
 
     assert set(payload) == {
         "diagnosis",
+        "deterministic_selection",
         "eligible_route_policy",
         "simulation_results",
     }
+    assert payload["deterministic_selection"]["option"]["option_id"] == "stripe-25"
     serialized = json.dumps(payload)
     assert "transaction_id" not in serialized
     assert "api_key" not in serialized

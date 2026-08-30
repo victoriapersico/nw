@@ -2,9 +2,9 @@
 
 ## Responsibility boundary
 
-POST-MVP-04 turns deterministic simulation results into a structured,
-human-reviewable recommendation. It does not approve, apply, monitor, or roll
-back a routing change.
+POST-MVP-04 deterministically ranks simulation results and turns the selected
+option into a structured, human-reviewable explanation. It does not approve,
+apply, monitor, or roll back a routing change.
 
 ```text
 Diagnosis + RoutingPolicy + SimulationResult[]
@@ -19,15 +19,20 @@ transition it through `pending_approval`, `approved`, `simulated_active`,
 
 ## Model boundary
 
+The application first ranks eligible options by confidence-adjusted expected
+recovery, then prefers the smaller traffic shift and stable identifiers for
+ties. OpenAI does not participate in this selection.
+
 The OpenAI call receives only:
 
 - `Diagnosis`;
 - the matching eligible-route `RoutingPolicy`;
-- deterministic `SimulationResult` objects.
+- deterministic `SimulationResult` objects, including the application-selected
+  result marked explicitly as `deterministic_selection`.
 
 It never receives raw transactions, provider credentials, approval decisions,
-execution requests, or routing tools. The model may select one eligible
-`option_id`, provide qualitative rationale, or abstain. Confidence, traffic
+execution requests, or routing tools. Its structured output has no `option_id`:
+the model may provide qualitative rationale or abstain. Confidence, traffic
 percentage, recovery, and cost remain deterministic values copied by the
 application from the selected simulation.
 
@@ -40,15 +45,14 @@ The application returns `not_recommended` without an OpenAI call when:
 - every alternative is blocked or inconclusive;
 - every otherwise eligible alternative violates the routing policy.
 
-An OpenAI selection is rejected when its option is unknown, blocked, or outside
-the provider allowlist or traffic cap. Model-authored wording cannot contain
-numeric, capacity, fee, or cost claims; those values are rendered locally from
-the selected `SimulationResult`.
+The structured explanation rejects any extra field, so OpenAI cannot insert or
+replace the selected option. Model-authored wording cannot contain numeric,
+capacity, fee, or cost claims; those values are rendered locally from the
+selected `SimulationResult`.
 
 ## Mock mode
 
-Mock Mode ranks eligible alternatives by confidence-adjusted expected recovery,
-then prefers the smaller traffic shift and a stable provider-name tie-breaker.
+Mock Mode uses the same application-owned ranking and a deterministic explanation.
 It returns the same `RoutingRecommendation` contract without making an API call.
 
 ## Approval and audit integration
