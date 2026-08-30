@@ -17,6 +17,7 @@ TransactionStatus = Literal["approved", "declined"]
 Severity = Literal["low", "medium", "high", "critical"]
 IncidentStatus = Literal["active", "resolved"]
 DiagnosisStatus = Literal["confirmed", "insufficient_evidence"]
+AlertType = Literal["incident_detected", "approval_required", "rollback_triggered"]
 EvidenceDimension = Literal[
     "merchant",
     "country",
@@ -479,6 +480,92 @@ class DiagnosedIncident(BaseModel):
     incident: Incident
     diagnosis: Diagnosis
     remediation: RoutingRecommendation | None = None
+
+
+class DeclineCodePatternEntry(BaseModel):
+    """One code in a normalized, deterministic decline pattern."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: DeclineCode
+    decline_count: int = Field(ge=1)
+
+
+class IncidentFingerprint(BaseModel):
+    """Exact-match key used for the local incident memory; never embeddings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    merchant: Merchant
+    country: Country
+    provider: Provider | None = None
+    payment_method: PaymentMethod | None = None
+    decline_pattern: list[DeclineCodePatternEntry] = Field(default_factory=list)
+
+
+class IncidentMemoryCase(BaseModel):
+    """Persistent evidence and outcome snapshots for one detected incident."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    incident: Incident
+    diagnosis: Diagnosis
+    remediation: RoutingRecommendation | None = None
+    fingerprint: IncidentFingerprint
+    decision: ApprovalDecision | None = None
+    change: SimulatedRoutingChange | None = None
+
+
+class SimilarIncident(BaseModel):
+    """A prior exact deterministic fingerprint match."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: str = Field(min_length=1, max_length=128)
+    detected_at: datetime
+    severity: Severity
+    outcome: Literal["open", "approved", "rejected", "rolled_back", "completed"]
+
+
+class Alert(BaseModel):
+    """A local operator notification; delivery integrations are intentionally absent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    alert_id: str = Field(min_length=1, max_length=128)
+    type: AlertType
+    created_at: datetime
+    incident_id: str | None = Field(default=None, max_length=128)
+    recommendation_id: str | None = Field(default=None, max_length=128)
+    change_id: str | None = Field(default=None, max_length=128)
+    acknowledged: bool = False
+    acknowledged_at: datetime | None = None
+    acknowledged_by: str | None = Field(default=None, max_length=128)
+    payload: dict[str, object] = Field(default_factory=dict)
+
+
+class AlertAcknowledgeRequest(BaseModel):
+    """Human acknowledgement for a local inbox item."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    acknowledged_by: str = Field(min_length=1, max_length=128)
+
+
+class PostIncidentReport(BaseModel):
+    """Evidence-bound report assembled entirely from persisted snapshots."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    report_id: str = Field(min_length=1, max_length=128)
+    incident_id: str = Field(min_length=1, max_length=128)
+    generated_at: datetime
+    summary: str = Field(min_length=1, max_length=2_000)
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    decision: ApprovalDecision | None = None
+    change: SimulatedRoutingChange | None = None
+    audit_trail: list[RemediationAuditEvent] = Field(default_factory=list)
+    similar_cases: list[SimilarIncident] = Field(default_factory=list)
 
 
 class MerchantIncidentsResponse(BaseModel):

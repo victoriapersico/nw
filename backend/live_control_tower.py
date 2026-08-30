@@ -1,7 +1,7 @@
 
 """Stateful live Control Tower orchestration for the FastAPI demo."""
 
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from threading import RLock
 from uuid import uuid4
@@ -17,6 +17,7 @@ from backend.integration.evaluation_runtime import (
     build_runtime,
 )
 from backend.incidents.engine import IncidentEngine
+from backend.incidents.memory_store import IncidentMemoryStore
 from backend.remediation.audit_store import RemediationAuditStore
 from backend.schemas import (
     DetectionRequest,
@@ -28,9 +29,13 @@ from backend.schemas import (
     ApprovalDecision,
     ApprovalRequest,
     ApprovalRevocationRequest,
+    Alert,
+    DeclineCodePatternEntry,
     ExecutionRequest,
     ExecutionResult,
     Incident,
+    IncidentFingerprint,
+    IncidentMemoryCase,
     MerchantMonitoringResponse,
     MerchantIncidentsResponse,
     RoutingRecommendation,
@@ -41,6 +46,8 @@ from backend.schemas import (
     SimulatedChangeRollbackRequest,
     SimulatedRoutingChange,
     RoutingWorkflow,
+    PostIncidentReport,
+    SimilarIncident,
     SimulationRequest,
     TransactionBatch,
 )
@@ -60,6 +67,7 @@ class LiveControlTower:
         runtime: ControlTowerEvaluationRuntime,
         initial_scenario: ScenarioDefinition,
         audit_store: RemediationAuditStore | None = None,
+        incident_memory_store: IncidentMemoryStore | None = None,
     ) -> None:
         self._runtime = runtime
         self._initial_scenario = initial_scenario
@@ -77,6 +85,7 @@ class LiveControlTower:
         self._workflows: dict[str, RoutingWorkflow] = {}
         self._audit_events: list[RemediationAuditEvent] = []
         self._audit_store = audit_store or RemediationAuditStore()
+        self._incident_memory_store = incident_memory_store or IncidentMemoryStore()
         self.reset()
 
     def reset(self) -> None:
@@ -156,6 +165,7 @@ class LiveControlTower:
                 raise RuntimeError("Remediation simulation is unavailable.")
             updated = item.model_copy(update={"remediation": proposal})
             self._incidents[item.incident.incident_id] = updated
+            self._persist_case(item.incident.incident_id)
             self._register_recommendation(proposal)
             return proposal
 
@@ -230,6 +240,7 @@ class LiveControlTower:
                 actor=decision.decided_by,
                 detail=f"Human decision recorded: {status}.",
             )
+            self._persist_case(incident.incident_id, decision=decision)
             return decision
 
     def revoke_approval(
@@ -263,6 +274,7 @@ class LiveControlTower:
                 actor=request.revoked_by,
                 detail=request.reason,
             )
+            self._persist_case(revoked.incident_id, decision=revoked)
             return revoked.model_copy(deep=True)
 
     def request_execution(self, request: ExecutionRequest) -> ExecutionResult:
@@ -383,6 +395,7 @@ class LiveControlTower:
                     f"{change.target_provider}; no provider was contacted."
                 ),
             )
+            self._persist_case(incident.incident_id, change=change)
             return change.model_copy(deep=True)
 
     def rollback_simulated_change(
@@ -426,6 +439,7 @@ class LiveControlTower:
                 actor=request.decided_by,
                 detail=request.note,
             )
+            self._persist_case_for_recommendation(completed.recommendation_id, change=completed)
             return completed.model_copy(deep=True)
 
     def simulated_change(self, change_id: str) -> SimulatedRoutingChange:
@@ -446,6 +460,80 @@ class LiveControlTower:
     def remediation_audit(self, recommendation_id: str | None = None) -> list[RemediationAuditEvent]:
         with self._lock:
             return self._audit_store.events(recommendation_id)
+
+    def alerts(self, acknowledged: bool | None = None) -> list[Alert]:
+        """Return the durable local notification inbox."""
+
+        with self._lock:
+            return self._incident_memory_store.alerts(acknowledged)
+
+    def acknowledge_alert(self, alert_id: str, acknowledged_by: str) -> Alert:
+        with self._lock:
+            return self._incident_memory_store.acknowledge_alert(alert_id, acknowledged_by)
+
+    def similar_incidents(self, incident_id: str) -> list[SimilarIncident]:
+        """Find only exact merchant/country/provider/method/code-pattern matches."""
+
+        with self._lock:
+            case = self._incident_memory_store.case(incident_id)
+            if case is None:
+                raise KeyError(incident_id)
+            return [
+                self._similar_incident(item)
+                for item in self._incident_memory_store.similar_cases(
+                    case.fingerprint, exclude_incident_id=incident_id
+                )
+            ]
+
+    def generate_post_incident_report(self, incident_id: str) -> PostIncidentReport:
+        """Persist a deterministic report; no LLM-authored operational facts."""
+
+        with self._lock:
+            case = self._incident_memory_store.case(incident_id)
+            if case is None:
+                raise KeyError(incident_id)
+            recommendation_id = (
+                case.remediation.recommendation_id if case.remediation else None
+            )
+            audit_trail = (
+                self._audit_store.events(recommendation_id)
+                if recommendation_id is not None
+                else []
+            )
+            similar_cases = [
+                self._similar_incident(item)
+                for item in self._incident_memory_store.similar_cases(
+                    case.fingerprint, exclude_incident_id=incident_id
+                )
+            ]
+            outcome = self._case_outcome(case)
+            summary = (
+                f"{case.incident.severity.title()} incident for "
+                f"{case.incident.merchant} in {case.incident.country}: approval "
+                f"conversion was {case.incident.actual_conversion:.1%} versus "
+                f"{case.incident.expected_conversion:.1%} expected. "
+                f"Recorded outcome: {outcome}."
+            )
+            report = PostIncidentReport(
+                report_id=f"report-{uuid4().hex}",
+                incident_id=incident_id,
+                generated_at=datetime.now(timezone.utc),
+                summary=summary,
+                evidence=case.diagnosis.evidence,
+                decision=case.decision,
+                change=case.change,
+                audit_trail=audit_trail,
+                similar_cases=similar_cases,
+            )
+            self._incident_memory_store.save_report(report)
+            return report
+
+    def post_incident_report(self, incident_id: str) -> PostIncidentReport:
+        with self._lock:
+            report = self._incident_memory_store.report(incident_id)
+            if report is None:
+                raise KeyError(incident_id)
+            return report
 
     def monitoring_for(self, merchant: Merchant) -> MerchantMonitoringResponse:
         """Return measured simulator metrics for the latest live window."""
@@ -532,6 +620,17 @@ class LiveControlTower:
                 remediation=remediation,
             )
             self._incidents[incident.incident_id] = diagnosed
+            self._store_detected_incident(diagnosed, batch)
+            self._incident_memory_store.create_alert(
+                alert_type="incident_detected",
+                dedupe_key=f"incident_detected:{incident.incident_id}",
+                incident_id=incident.incident_id,
+                payload={
+                    "merchant": incident.merchant,
+                    "country": incident.country,
+                    "severity": incident.severity,
+                },
+            )
             if remediation is not None:
                 self._register_recommendation(remediation)
             diagnosed_incidents.append(diagnosed)
@@ -575,6 +674,7 @@ class LiveControlTower:
             )
             updated = change.model_copy(update={"monitoring": [*change.monitoring, monitored]})
             self._simulated_changes[change.change_id] = updated
+            self._persist_case_for_recommendation(change.recommendation_id, change=updated)
             self._record_audit(
                 event_type="target_route_monitored",
                 recommendation_id=change.recommendation_id,
@@ -615,6 +715,15 @@ class LiveControlTower:
             change_id=change.change_id,
             actor=actor,
             detail=reason,
+        )
+        self._persist_case_for_recommendation(rolled_back.recommendation_id, change=rolled_back)
+        self._incident_memory_store.create_alert(
+            alert_type="rollback_triggered",
+            dedupe_key=f"rollback_triggered:{rolled_back.change_id}",
+            incident_id=self._workflows[rolled_back.recommendation_id].incident_id,
+            recommendation_id=rolled_back.recommendation_id,
+            change_id=rolled_back.change_id,
+            payload={"reason": reason, "actor": actor},
         )
         return rolled_back.model_copy(deep=True)
 
@@ -680,7 +789,18 @@ class LiveControlTower:
             )
         if recommendation.status != "recommended":
             return None
-        return self._ensure_workflow(recommendation)
+        workflow = self._ensure_workflow(recommendation)
+        self._incident_memory_store.create_alert(
+            alert_type="approval_required",
+            dedupe_key=f"approval_required:{recommendation.recommendation_id}",
+            incident_id=recommendation.incident_id,
+            recommendation_id=recommendation.recommendation_id,
+            payload={
+                "merchant": self._incidents[recommendation.incident_id].incident.merchant,
+                "required_approval": recommendation.required_approval,
+            },
+        )
+        return workflow
 
     def _transition_workflow(
         self,
@@ -730,6 +850,105 @@ class LiveControlTower:
         )
         self._audit_events.append(event)
         self._audit_store.append(event)
+
+    def _store_detected_incident(
+        self, diagnosed: DiagnosedIncident, batch: TransactionBatch
+    ) -> None:
+        self._incident_memory_store.upsert_case(
+            IncidentMemoryCase(
+                incident=diagnosed.incident,
+                diagnosis=diagnosed.diagnosis,
+                remediation=diagnosed.remediation,
+                fingerprint=self._fingerprint(diagnosed.incident, batch),
+            )
+        )
+
+    def _persist_case(
+        self,
+        incident_id: str,
+        *,
+        decision: ApprovalDecision | None = None,
+        change: SimulatedRoutingChange | None = None,
+    ) -> None:
+        current = self._incident_memory_store.case(incident_id)
+        live = self._incidents.get(incident_id)
+        if current is None or live is None:
+            return
+        self._incident_memory_store.upsert_case(
+            current.model_copy(
+                update={
+                    "incident": live.incident,
+                    "diagnosis": live.diagnosis,
+                    "remediation": live.remediation,
+                    "decision": decision if decision is not None else current.decision,
+                    "change": change if change is not None else current.change,
+                }
+            )
+        )
+
+    def _persist_case_for_recommendation(
+        self,
+        recommendation_id: str,
+        *,
+        change: SimulatedRoutingChange | None = None,
+    ) -> None:
+        _, incident = self._recommendation(recommendation_id)
+        self._persist_case(incident.incident_id, change=change)
+
+    @staticmethod
+    def _fingerprint(
+        incident: Incident, batch: TransactionBatch
+    ) -> IncidentFingerprint:
+        declined = [
+            transaction
+            for transaction in batch.transactions
+            if transaction.merchant == incident.merchant
+            and transaction.country == incident.country
+            and transaction.status == "declined"
+        ]
+        scopes = Counter((item.provider, item.payment_method) for item in declined)
+        if not scopes:
+            return IncidentFingerprint(merchant=incident.merchant, country=incident.country)
+        provider, payment_method = min(
+            scopes, key=lambda item: (-scopes[item], item[0], item[1])
+        )
+        codes = Counter(
+            item.decline_code
+            for item in declined
+            if item.provider == provider and item.payment_method == payment_method
+            and item.decline_code is not None
+        )
+        pattern = [
+            DeclineCodePatternEntry(code=code, decline_count=count)
+            for code, count in sorted(codes.items(), key=lambda item: (-item[1], item[0]))
+        ]
+        return IncidentFingerprint(
+            merchant=incident.merchant,
+            country=incident.country,
+            provider=provider,
+            payment_method=payment_method,
+            decline_pattern=pattern,
+        )
+
+    @staticmethod
+    def _case_outcome(case: IncidentMemoryCase) -> str:
+        if case.change is not None and case.change.status == "rolled_back":
+            return "rolled_back"
+        if case.change is not None and case.change.status == "completed":
+            return "completed"
+        if case.decision is not None and case.decision.status == "approved":
+            return "approved"
+        if case.decision is not None:
+            return "rejected"
+        return "open"
+
+    def _similar_incident(self, case: IncidentMemoryCase) -> SimilarIncident:
+        return SimilarIncident(
+            incident_id=case.incident.incident_id,
+            detected_at=case.incident.detected_at,
+            severity=case.incident.severity,
+            outcome=self._case_outcome(case),
+        )
 
 
 def build_live_control_tower() -> LiveControlTower:

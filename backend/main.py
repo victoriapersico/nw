@@ -11,6 +11,8 @@ from backend.schemas import (
     ApprovalDecision,
     ApprovalRequest,
     ApprovalRevocationRequest,
+    Alert,
+    AlertAcknowledgeRequest,
     AnalysisRequest,
     AnalysisResponse,
     CreateInjectionRequest,
@@ -22,12 +24,14 @@ from backend.schemas import (
     Merchant,
     MerchantMonitoringResponse,
     MerchantIncidentsResponse,
+    PostIncidentReport,
     RoutingRecommendation,
     RemediationAuditEvent,
     SimulatedChangeRequest,
     SimulatedChangeCompletionRequest,
     SimulatedChangeRollbackRequest,
     SimulatedRoutingChange,
+    SimilarIncident,
     RoutingWorkflow,
     SimulationRequest,
     TransactionBatch,
@@ -272,6 +276,48 @@ def remediation_audit(recommendation_id: str | None = None) -> list[RemediationA
     """Expose the local audit trail for the human-approved demo workflow."""
 
     return get_control_tower().remediation_audit(recommendation_id)
+
+
+@app.get("/alerts", response_model=list[Alert])
+def list_alerts(acknowledged: bool | None = None) -> list[Alert]:
+    """List the local operator inbox; external notification delivery is absent."""
+
+    return get_control_tower().alerts(acknowledged)
+
+
+@app.post("/alerts/{alert_id}/acknowledge", response_model=Alert)
+def acknowledge_alert(alert_id: str, request: AlertAcknowledgeRequest) -> Alert:
+    try:
+        return get_control_tower().acknowledge_alert(alert_id, request.acknowledged_by)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown alert: {exc.args[0]}") from exc
+
+
+@app.get("/incidents/{incident_id}/similar-cases", response_model=list[SimilarIncident])
+def similar_incident_cases(incident_id: str) -> list[SimilarIncident]:
+    try:
+        return get_control_tower().similar_incidents(incident_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown incident: {exc.args[0]}") from exc
+
+
+@app.post("/incidents/{incident_id}/post-incident-report", response_model=PostIncidentReport)
+def generate_post_incident_report(incident_id: str) -> PostIncidentReport:
+    try:
+        return get_control_tower().generate_post_incident_report(incident_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown incident: {exc.args[0]}") from exc
+
+
+@app.get("/incidents/{incident_id}/post-incident-report", response_model=PostIncidentReport)
+def get_post_incident_report(incident_id: str) -> PostIncidentReport:
+    try:
+        return get_control_tower().post_incident_report(incident_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No persisted report for incident: {exc.args[0]}",
+        ) from exc
 
 
 @app.get(
