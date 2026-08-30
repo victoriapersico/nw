@@ -693,7 +693,11 @@ class LiveControlTower:
                 },
             )
             # External delivery is best-effort and never changes incident state.
-            self._telegram_notifier.notify_incident(incident)
+            self._telegram_notifier.notify_incident(
+                incident,
+                diagnosis=diagnosis,
+                recommendation=remediation,
+            )
             if remediation is not None:
                 self._register_recommendation(remediation)
             diagnosed_incidents.append(diagnosed)

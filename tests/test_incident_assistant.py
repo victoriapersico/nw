@@ -188,6 +188,24 @@ def test_mock_question_about_simulation_explains_the_selected_route() -> None:
     }
 
 
+def test_calendar_question_is_a_labelled_hypothesis_with_a_validation_step() -> None:
+    response = answer_incident_question(
+        _diagnosed_incident(),
+        "Could seasonality or month-end be contributing?",
+        mock_mode=True,
+    )
+
+    assert response.answerable is True
+    assert "Contextual hypothesis (not confirmed)" in response.answer
+    assert "does not establish seasonality" in response.answer
+    assert "compare approval" in response.answer
+    assert {fact.fact_id for fact in response.evidence} == {
+        "calendar_context",
+        "diagnosis_status",
+        "diagnosis_evidence_1",
+    }
+
+
 def test_unrelated_question_abstains_without_inventing() -> None:
     response = answer_incident_question(
         _diagnosed_incident(),

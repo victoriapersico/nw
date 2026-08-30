@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from datetime import timezone
 
 from openai import (
     ContentFilterFinishReasonError,
@@ -41,6 +42,15 @@ provider was contacted. If the supplied facts do not answer the question, set
 answerable to false, return no fact_ids, and say that the incident evidence does
 not establish the requested information. Respond in the language of the user's
 question and keep the answer concise.
+
+When the question asks about seasonality, calendar timing, campaigns, holidays,
+or other operating context, you may offer at most two *contextual hypotheses*.
+Each must be explicitly labelled "Contextual hypothesis (not confirmed)" and
+must be conditional, never a stated root cause. Use only the supplied timestamp
+and calendar_context fact: do not assert that an external event, holiday,
+campaign, or market trend actually occurred. State the specific historical or
+operational comparison needed to validate the hypothesis. Contextual hypotheses
+may suggest more investigation, but never a routing action or approval.
 """.strip()
 
 
@@ -72,6 +82,23 @@ def _percentage(value: float) -> str:
 
 def _optional_percentage(value: float | None) -> str:
     return _percentage(value) if value is not None else "unavailable"
+
+
+def _calendar_context(incident: Incident) -> str:
+    """Return the only calendar fact the assistant may use for context."""
+
+    detected_utc = incident.detected_at.astimezone(timezone.utc)
+    if detected_utc.day <= 10:
+        part_of_month = "the first third of the month"
+    elif detected_utc.day <= 20:
+        part_of_month = "the middle third of the month"
+    else:
+        part_of_month = "the final third of the month"
+    return (
+        f"The incident was detected at {detected_utc.isoformat()} and falls in "
+        f"{part_of_month}. No calendar event, campaign, holiday, or seasonal "
+        "baseline was supplied."
+    )
 
 
 def _selected_simulation(item: DiagnosedIncident) -> SimulationResult | None:
@@ -131,6 +158,11 @@ def build_incident_facts(
                 f"{_percentage(diagnosis.confidence)}; supported dimensions: "
                 f"{', '.join(diagnosis.root_cause_dimensions) or 'none'}."
             ),
+        ),
+        IncidentAssistantEvidence(
+            fact_id="calendar_context",
+            label="Calendar context",
+            value=_calendar_context(incident),
         ),
     ]
 
@@ -344,6 +376,23 @@ def _mock_draft(item: DiagnosedIncident, question: str) -> _AssistantDraft:
         "acción",
     )
     impact_terms = ("impact", "loss", "volume", "impacto", "pérdida", "volumen")
+    context_terms = (
+        "season",
+        "seasonal",
+        "month",
+        "month-end",
+        "payday",
+        "holiday",
+        "campaign",
+        "temporada",
+        "estacional",
+        "mes",
+        "fin de mes",
+        "quincena",
+        "feriado",
+        "festivo",
+        "campana",
+    )
     status_terms = (
         "status",
         "state",
@@ -463,6 +512,31 @@ def _mock_draft(item: DiagnosedIncident, question: str) -> _AssistantDraft:
             answerable=True,
             answer=answer,
             fact_ids=["selected_simulation", "human_gate"],
+        )
+
+    if any(term in normalized for term in context_terms):
+        context = _calendar_context(incident)
+        calendar_window = context.split(" falls in ", maxsplit=1)[-1].split(
+            ".", maxsplit=1
+        )[0]
+        answer = (
+            "Hipotesis contextual (sin confirmar): el incidente cae en "
+            f"{calendar_window}. Eso no demuestra estacionalidad ni una campana activa. "
+            "Para validarlo, compara la aprobacion de la misma combinacion de merchant, "
+            "pais, proveedor y metodo de pago contra el mismo periodo en ventanas anteriores."
+            if spanish
+            else "Contextual hypothesis (not confirmed): the incident falls in "
+            f"{calendar_window}. That does not establish seasonality or an active campaign. "
+            "To validate it, compare approval for the same merchant, country, provider, "
+            "and payment method against the equivalent period in prior windows."
+        )
+        fact_ids = ["calendar_context", "diagnosis_status"]
+        if diagnosis.evidence:
+            fact_ids.append("diagnosis_evidence_1")
+        return _AssistantDraft(
+            answerable=True,
+            answer=answer,
+            fact_ids=fact_ids,
         )
 
     if any(term in normalized for term in impact_terms):

@@ -2,7 +2,14 @@
 
 from datetime import datetime, timezone
 
-from backend.schemas import Incident
+from backend.schemas import (
+    Diagnosis,
+    EvidenceItem,
+    Incident,
+    RemediationOption,
+    RoutingRecommendation,
+    SimulationResult,
+)
 from backend.telegram_notifications import TelegramIncidentNotifier
 
 
@@ -28,6 +35,55 @@ def _incident() -> Incident:
     )
 
 
+def _diagnosis() -> Diagnosis:
+    return Diagnosis(
+        incident_id="inc-rappi-brazil-001",
+        root_cause_dimensions=["provider"],
+        evidence=[
+            EvidenceItem(
+                dimension="provider",
+                value="Stripe",
+                baseline_metric=0.91,
+                live_metric=0.42,
+                delta=-0.49,
+                sample_size=120,
+                explained_loss_share=0.84,
+            )
+        ],
+        confidence=0.91,
+        diagnosis_status="confirmed",
+        explanation="Provider-level degradation is evidenced.",
+        recommended_action="Review the local simulation.",
+    )
+
+
+def _recommendation() -> RoutingRecommendation:
+    simulation = SimulationResult(
+        option=RemediationOption(
+            option_id="route-adyen-25",
+            target_provider="Adyen",
+            traffic_shift_pct=0.25,
+        ),
+        status="eligible",
+        expected_approval_rate=0.90,
+        expected_recovered_value_per_hour=4_200,
+        expected_incremental_cost_per_hour=0,
+        confidence=0.88,
+    )
+    return RoutingRecommendation(
+        recommendation_id="rec-rappi-brazil-001",
+        incident_id="inc-rappi-brazil-001",
+        policy_id="policy-rappi-brazil",
+        status="recommended",
+        recommended_option_id=simulation.option.option_id,
+        alternatives=[simulation],
+        rationale="Eligible local dry-run.",
+        confidence=simulation.confidence,
+        proposed_traffic_cap=simulation.option.traffic_shift_pct,
+        rollback_reference="rollback-rappi-brazil-001",
+    )
+
+
 def test_incident_notification_contains_dashboard_link_and_no_action() -> None:
     sent: list[dict[str, object]] = []
 
@@ -43,13 +99,20 @@ def test_incident_notification_contains_dashboard_link_and_no_action() -> None:
         post=post,
     )
 
-    assert notifier.notify_incident(_incident()) is True
+    assert notifier.notify_incident(
+        _incident(),
+        diagnosis=_diagnosis(),
+        recommendation=_recommendation(),
+    ) is True
     assert sent[0]["url"] == "https://api.telegram.org/bottelegram-token/sendMessage"
     payload = sent[0]["json"]
     assert isinstance(payload, dict)
     assert payload["chat_id"] == "123"
     assert "Incident detected" in str(payload["text"])
-    assert "No routing change is automatic" in str(payload["text"])
+    assert "Primary signal: provider = Stripe" in str(payload["text"])
+    assert "Simulate shifting 25% of affected traffic to Adyen" in str(payload["text"])
+    assert "local simulation only" in str(payload["text"])
+    assert "approve or decline this suggestion" in str(payload["text"])
     assert payload["reply_markup"] == {
         "inline_keyboard": [
             [

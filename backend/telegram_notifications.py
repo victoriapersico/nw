@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 import requests
 
-from backend.schemas import Incident
+from backend.schemas import Diagnosis, Incident, RoutingRecommendation, SimulationResult
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -44,24 +44,26 @@ class TelegramIncidentNotifier:
     def configured(self) -> bool:
         return self.enabled and self.token is not None and self.chat_id is not None
 
-    def notify_incident(self, incident: Incident) -> bool:
-        """Deliver one incident event. Failures never interrupt monitoring."""
+    def notify_incident(
+        self,
+        incident: Incident,
+        *,
+        diagnosis: Diagnosis | None = None,
+        recommendation: RoutingRecommendation | None = None,
+    ) -> bool:
+        """Deliver one incident event. Failures never interrupt monitoring.
+
+        Telegram is deliberately read-only: it can describe the evidence and the
+        proposed local simulation, but it never exposes approval or execution
+        actions. Those remain in the Control Tower UI.
+        """
 
         if not self.configured:
             return False
 
         payload: dict[str, object] = {
             "chat_id": self.chat_id,
-            "text": (
-                "🚨 Incident detected\n"
-                f"Merchant: {incident.merchant}\n"
-                f"Country: {incident.country}\n"
-                f"Severity: {incident.severity.title()}\n"
-                f"Approval: {incident.actual_conversion:.1%} vs "
-                f"{incident.expected_conversion:.1%} expected\n"
-                f"Estimated loss: US$ {incident.estimated_loss_per_hour:,.0f}/hour\n\n"
-                "Review the evidence in Control Tower. No routing change is automatic."
-            ),
+            "text": self._notification_text(incident, diagnosis, recommendation),
         }
         # Telegram rejects localhost and non-HTTPS URLs in inline keyboard buttons.
         # Still deliver the alert during local demos; a public HTTPS dashboard URL
@@ -87,3 +89,87 @@ class TelegramIncidentNotifier:
         except requests.RequestException:
             return False
         return True
+
+    @staticmethod
+    def _selected_simulation(
+        recommendation: RoutingRecommendation | None,
+    ) -> SimulationResult | None:
+        if recommendation is None or recommendation.recommended_option_id is None:
+            return None
+        return next(
+            (
+                simulation
+                for simulation in recommendation.alternatives
+                if simulation.option.option_id == recommendation.recommended_option_id
+            ),
+            None,
+        )
+
+    @classmethod
+    def _notification_text(
+        cls,
+        incident: Incident,
+        diagnosis: Diagnosis | None,
+        recommendation: RoutingRecommendation | None,
+    ) -> str:
+        """Render only application-owned, read-only incident context."""
+
+        lines = [
+            "Incident detected",
+            f"Merchant: {incident.merchant}",
+            f"Country: {incident.country}",
+            f"Severity: {incident.severity.title()}",
+            (
+                f"Approval: {incident.actual_conversion:.1%} vs "
+                f"{incident.expected_conversion:.1%} expected"
+            ),
+            f"Estimated loss: US$ {incident.estimated_loss_per_hour:,.0f}/hour",
+        ]
+
+        if diagnosis is not None:
+            lines.extend(["", "Evidence-backed diagnosis"])
+            if diagnosis.evidence:
+                strongest = diagnosis.evidence[0]
+                lines.append(
+                    f"Primary signal: {strongest.dimension} = {strongest.value}; "
+                    f"approval {strongest.baseline_metric:.1%} to "
+                    f"{strongest.live_metric:.1%} across "
+                    f"{strongest.sample_size:,} attempts."
+                )
+            elif diagnosis.root_cause_dimensions:
+                lines.append(
+                    "Diagnosis is still collecting evidence for: "
+                    f"{', '.join(diagnosis.root_cause_dimensions)}."
+                )
+            else:
+                lines.append("No root-cause evidence is confirmed yet.")
+
+        selected = cls._selected_simulation(recommendation)
+        if recommendation is not None and recommendation.status == "recommended" and selected:
+            lines.extend(
+                [
+                    "",
+                    "Suggested dry-run",
+                    (
+                        "Simulate shifting "
+                        f"{selected.option.traffic_shift_pct:.0%} of affected traffic "
+                        f"to {selected.option.target_provider}."
+                    ),
+                    (
+                        "Estimated recovery: US$ "
+                        f"{selected.expected_recovered_value_per_hour:,.0f}/hour "
+                        f"at {selected.confidence:.0%} simulation confidence."
+                    ),
+                    "This is a local simulation only. No production routing is changed.",
+                    "Open Control Tower to approve or decline this suggestion.",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "",
+                    "No routing simulation is currently recommended.",
+                    "Open Control Tower to review the incident and its evidence.",
+                ]
+            )
+        return "\n".join(lines)
