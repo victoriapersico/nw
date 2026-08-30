@@ -507,7 +507,11 @@ with st.container(key="demo_toolbar"):
         )
     with toolbar_action:
         action_label = "Pause simulator" if st.session_state["live_playback"] else "Start simulator"
-        if st.button(action_label, key="demo_live_action", width="stretch"):
+        if st.button(
+            action_label,
+            key="demo_live_action",
+            use_container_width=True,
+        ):
             st.session_state["live_playback"] = not st.session_state["live_playback"]
             st.rerun()
 
@@ -629,24 +633,55 @@ if live_incidents is not None:
             "decline_code": "Decline code",
             "intersection": "Intersection",
         }
+        diagnosis_confirmed = diagnosis["diagnosis_status"] == "confirmed"
+        displayed_evidence = (
+            [
+                item
+                for item in evidence
+                if item["dimension"] in diagnosis["root_cause_dimensions"]
+            ]
+            if diagnosis_confirmed
+            else evidence
+        )
+        grouped_evidence: dict[str, list[str]] = {}
+        for item in displayed_evidence:
+            label = dimension_labels[item["dimension"]]
+            values = grouped_evidence.setdefault(label, [])
+            if item["value"] not in values:
+                values.append(item["value"])
         root_cause = {"Country": raw_incident["country"]}
-        for item in evidence:
-            root_cause[dimension_labels[item["dimension"]]] = item["value"]
+        root_cause.update(
+            {label: "; ".join(values) for label, values in grouped_evidence.items()}
+        )
 
         affected_slice = (
             ", ".join(
                 f"{dimension_labels[item['dimension']]}: {item['value']}"
-                for item in evidence
+                for item in displayed_evidence
             )
             or "general payment traffic"
+        )
+        incident_title = (
+            f"Approval degradation — {affected_slice}"
+            if diagnosis_confirmed
+            else f"Approval degradation under investigation — {raw_incident['country']}"
         )
 
         data["incident"] = {
             "severity": raw_incident["severity"].title(),
             "country": raw_incident["country"],
-            "title": f"Approval degradation — {affected_slice}",
+            "title": incident_title,
             "root_cause": root_cause,
             "diagnosis": diagnosis["explanation"],
+            "executive_summary": diagnosis.get("executive_summary"),
+            "evidence_citations": diagnosis.get("evidence_citations", []),
+            "evidence_citation_labels": {
+                f"evidence-{index}": (
+                    f"{dimension_labels[item['dimension']]}: {item['value']} "
+                    f"({item['baseline_metric']:.1%} → {item['live_metric']:.1%})"
+                )
+                for index, item in enumerate(evidence, start=1)
+            },
             "diagnosis_points": [
                 (
                     f"{dimension_labels[item['dimension']]}: "
@@ -658,6 +693,7 @@ if live_incidents is not None:
             ],
             "recommendation": diagnosis["recommended_action"],
             "confidence": diagnosis["confidence"],
+            "diagnosis_status": diagnosis["diagnosis_status"],
         }
 
 countries = data["countries"]
@@ -767,7 +803,7 @@ def render_live_summary() -> None:
         <div id="report"></div>
         <section class="executive-summary">
             <div class="section-header">
-                <div class="eyebrow">Executive summary</div>
+                <div class="eyebrow">Live operations overview</div>
                 <span class="live-note">Real simulator · updates every 5 seconds</span>
             </div>
             <div class="kpi-row">
@@ -1003,10 +1039,17 @@ st.markdown("### Root cause & recommendation")
 if incident is None:
     st.success("There are no incidents to diagnose.", icon="✅")
 else:
+    if incident.get("executive_summary"):
+        st.info(incident["executive_summary"], icon="📌")
+    diagnosis_confirmed = incident.get("diagnosis_status") == "confirmed"
     diagnosis_column, action_column = st.columns(2)
     with diagnosis_column:
         with st.container(border=True):
-            st.markdown("#### Probable root cause")
+            st.markdown(
+                "#### Confirmed root cause"
+                if diagnosis_confirmed
+                else "#### Evidence under review"
+            )
             root_cause_items = "".join(
                 f"<div class='cause-item'><div class='cause-label'>{label}</div>"
                 f"<div class='cause-value'>{value}</div></div>"
@@ -1016,7 +1059,18 @@ else:
                 f"<div class='root-cause-grid'>{root_cause_items}</div>",
                 unsafe_allow_html=True,
             )
+            st.markdown("##### Operations assessment")
+            st.write(incident["diagnosis"])
             st.caption(f"Confidence: {incident['confidence']:.0%}")
+            if incident.get("evidence_citations"):
+                citation_labels = incident.get("evidence_citation_labels", {})
+                st.caption(
+                    "Evidence citations: "
+                    + "; ".join(
+                        citation_labels.get(citation, citation)
+                        for citation in incident["evidence_citations"]
+                    )
+                )
     with action_column:
         with st.container(border=True):
             st.markdown("#### Recommended action")

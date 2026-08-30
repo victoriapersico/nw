@@ -17,6 +17,8 @@ TransactionStatus = Literal["approved", "declined"]
 Severity = Literal["low", "medium", "high", "critical"]
 IncidentStatus = Literal["active", "resolved"]
 DiagnosisStatus = Literal["confirmed", "insufficient_evidence"]
+NarrativeLanguage = Literal["en", "es"]
+NarrativeTone = Literal["operations", "executive"]
 EvidenceDimension = Literal[
     "merchant",
     "country",
@@ -126,6 +128,8 @@ class Diagnosis(BaseModel):
     diagnosis_status: DiagnosisStatus
     explanation: str = Field(min_length=1, max_length=2_000)
     recommended_action: str = Field(min_length=1, max_length=1_000)
+    executive_summary: str | None = Field(default=None, min_length=1, max_length=300)
+    evidence_citations: list[str] = Field(default_factory=list)
 
 
 class InjectionConfig(BaseModel):
