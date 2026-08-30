@@ -2,8 +2,12 @@ from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
-from backend.live_control_tower import build_live_control_tower
-from backend.live_control_tower import LiveControlTower
+from backend.live_control_tower import (
+    LIVE_CHART_WINDOWS,
+    LIVE_HISTORY_DAYS,
+    LiveControlTower,
+    build_live_control_tower,
+)
 from backend.main import app, get_control_tower
 from backend.evaluation.scenarios import SCENARIOS
 from backend.schemas import (
@@ -26,6 +30,11 @@ STRONG_INJECTION = InjectionConfig(
 )
 
 
+def test_live_history_retains_a_full_simulated_month() -> None:
+    assert LIVE_HISTORY_DAYS == 30
+    assert LIVE_CHART_WINDOWS == 30 * 24 * 12
+
+
 def test_reset_supports_three_clean_inject_detect_cycles() -> None:
     tower = build_live_control_tower()
 
@@ -43,6 +52,109 @@ def test_reset_supports_three_clean_inject_detect_cycles() -> None:
         assert len(incidents) == 1
         assert incidents[0].incident.merchant == "Rappi"
         assert incidents[0].incident.country == "Brazil"
+
+
+def test_combined_method_and_bank_injection_is_diagnosed_as_an_intersection() -> None:
+    tower = build_live_control_tower()
+    tower.inject(
+        InjectionConfig(
+            merchant="Rappi",
+            country="Brazil",
+            payment_method="PIX",
+            issuing_bank="Itaú",
+            target_approval_rate=0.0,
+            duration_windows=30,
+        )
+    )
+
+    diagnosis = tower.incidents_for("Rappi").incidents[0].diagnosis
+
+    assert diagnosis.diagnosis_status == "confirmed"
+    assert set(diagnosis.root_cause_dimensions) >= {
+        "payment_method",
+        "issuing_bank",
+    }
+    assert any(
+        item.dimension == "intersection"
+        and "PIX" in item.value
+        and "Itaú" in item.value
+        for item in diagnosis.evidence
+    )
+
+
+def test_mexico_card_and_provider_injection_is_detected_and_explained() -> None:
+    """Protect the Judge Lab path that was reported as intermittently invisible."""
+
+    tower = build_live_control_tower()
+    for provider in ("Stripe", "Adyen", "dLocal"):
+        tower.reset()
+        tower.inject(
+            InjectionConfig(
+                merchant="Rappi",
+                country="Mexico",
+                provider=provider,
+                payment_method="CARD",
+                target_approval_rate=0.0,
+                duration_windows=30,
+            )
+        )
+
+        incidents = tower.incidents_for("Rappi").incidents
+
+        assert len(incidents) == 1
+        assert incidents[0].incident.country == "Mexico"
+        assert incidents[0].diagnosis.diagnosis_status == "confirmed"
+        assert set(incidents[0].diagnosis.root_cause_dimensions) >= {
+            "provider",
+            "payment_method",
+        }
+
+
+def test_mexico_issuing_bank_injection_is_detected_and_explained() -> None:
+    """A bank-only outage must not abstain because it affects card/provider slices."""
+
+    tower = build_live_control_tower()
+    tower.inject(
+        InjectionConfig(
+            merchant="Rappi",
+            country="Mexico",
+            issuing_bank="Banorte",
+            target_approval_rate=0.0,
+            duration_windows=30,
+        )
+    )
+
+    incidents = tower.incidents_for("Rappi").incidents
+
+    assert len(incidents) == 1
+    assert incidents[0].incident.country == "Mexico"
+    assert incidents[0].diagnosis.diagnosis_status == "confirmed"
+    assert incidents[0].diagnosis.root_cause_dimensions == ["issuing_bank"]
+    assert incidents[0].diagnosis.evidence[0].value == "Banorte"
+
+
+def test_bank_injection_is_explained_for_a_smaller_merchant_slice() -> None:
+    """Bank-only Judge Lab injections must not be hidden by correlated CARD loss."""
+
+    tower = build_live_control_tower()
+    tower.inject(
+        InjectionConfig(
+            merchant="Despegar",
+            country="Colombia",
+            issuing_bank="Banco de Bogotá",
+            target_approval_rate=0.30,
+            duration_windows=30,
+        )
+    )
+
+    incidents = tower.incidents_for("Despegar").incidents
+
+    assert incidents
+    assert any(
+        item.diagnosis.diagnosis_status == "confirmed"
+        and "issuing_bank" in item.diagnosis.root_cause_dimensions
+        for item in incidents
+    )
 
 
 def test_reset_endpoint_clears_cached_live_state() -> None:

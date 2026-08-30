@@ -71,13 +71,22 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+country = st.selectbox(
+    "Country",
+    ["Mexico", "Brazil", "Colombia"],
+    key="judge_lab_country",
+)
+
 with st.form("judge_injection_form"):
     st.markdown("### Configure incident")
     form_left, form_middle, form_right = st.columns(3)
     with form_left:
         merchant = st.selectbox("Merchant", ["Rappi", "Carrefour", "Despegar"], index=2)
-        country = st.selectbox("Country", ["Mexico", "Brazil", "Colombia"])
-        provider = st.selectbox("Provider", ["Any", "Stripe", "Adyen", "dLocal"], index=2)
+        provider = st.selectbox(
+            "Provider",
+            ["Any", "Stripe", "Adyen", "dLocal"],
+            key="judge_lab_provider_v2",
+        )
     with form_middle:
         payment_method = st.selectbox(
             "Payment method",
@@ -94,9 +103,15 @@ with st.form("judge_injection_form"):
     with form_right:
         target_rate_percent = st.slider("Target approval rate", 0, 100, 30, 5)
         duration_windows = st.number_input(
-            "Duration (5-minute windows)", min_value=1, max_value=24, value=6
+            "Duration (simulated 5-minute windows)",
+            min_value=6,
+            max_value=60,
+            value=30,
         )
-        st.caption("Six windows equal 30 simulated minutes.")
+        st.caption(
+            "This controls how long the simulated degradation is active. "
+            "It does not delay detection; the API evaluates two windows immediately."
+        )
 
     submitted = st.form_submit_button(
         "Inject incident",
@@ -149,6 +164,19 @@ if active_injection:
         f"{active_injection['merchant']} · {active_injection['country']} · "
         f"target approval {active_injection['target_approval_rate']:.0%}",
         icon="🚨",
+    )
+    selected_filters = [
+        value
+        for value in (
+            active_injection.get("provider"),
+            active_injection.get("payment_method"),
+            active_injection.get("issuing_bank"),
+        )
+        if value is not None
+    ]
+    st.caption(
+        "Injected slice: "
+        + (" · ".join(selected_filters) if selected_filters else "all payment traffic")
     )
     if reset_column.button("Reset", use_container_width=True):
         try:
