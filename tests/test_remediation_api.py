@@ -1,6 +1,6 @@
-"""End-to-end contracts for recommendation and human-assisted dry-run routing."""
+"""End-to-end contracts for recommendation and human-approved dry-run routing."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,7 +9,13 @@ from backend.main import app, get_control_tower
 
 
 @pytest.fixture(autouse=True)
-def clean_control_tower():
+def clean_control_tower(tmp_path, monkeypatch):
+    """Give each test an isolated persistent audit database and runtime."""
+
+    monkeypatch.setenv(
+        "REMEDIATION_AUDIT_DB",
+        str(tmp_path / "remediation-audit.sqlite3"),
+    )
     get_control_tower.cache_clear()
     yield
     get_control_tower.cache_clear()
@@ -43,6 +49,24 @@ def _create_recommendation(client: TestClient) -> dict:
     return response.json()
 
 
+def _approval_payload(
+    recommendation: dict,
+    decision_id: str,
+    **overrides: object,
+) -> dict:
+    payload = {
+        "decision_id": decision_id,
+        "recommendation_id": recommendation["recommendation_id"],
+        "merchant": "Rappi",
+        "decision": "approved",
+        "decided_by": "merchant-operator",
+        "decided_at": datetime.now(timezone.utc).isoformat(),
+        "idempotency_key": f"idem-{decision_id}",
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _record_approval(
     client: TestClient,
     recommendation: dict,
@@ -52,13 +76,11 @@ def _record_approval(
 ) -> dict:
     response = client.post(
         "/remediation/approvals",
-        json={
-            "decision_id": decision_id,
-            "recommendation_id": recommendation["recommendation_id"],
-            "decision": decision,
-            "decided_by": "merchant-operator",
-            "decided_at": datetime.now(timezone.utc).isoformat(),
-        },
+        json=_approval_payload(
+            recommendation,
+            decision_id,
+            decision=decision,
+        ),
     )
     assert response.status_code == 200
     return response.json()
@@ -81,7 +103,7 @@ def _apply_change(
     )
 
 
-def test_recommendation_enters_pending_approval_and_is_audited() -> None:
+def test_recommendation_enters_pending_approval_and_is_persisted() -> None:
     with TestClient(app) as client:
         recommendation = _create_recommendation(client)
 
@@ -140,6 +162,47 @@ def test_legacy_execution_contract_stays_dry_run_and_idempotent() -> None:
         assert first.json()["status"] == "dry_run"
         assert first.json()["executed"] is False
         assert repeated.json()["execution_id"] == first.json()["execution_id"]
+
+
+def test_approval_captures_evidence_and_is_idempotent() -> None:
+    with TestClient(app) as client:
+        recommendation = _create_recommendation(client)
+        payload = _approval_payload(recommendation, "approval-linked-001")
+
+        approval = client.post("/remediation/approvals", json=payload)
+        duplicate = client.post("/remediation/approvals", json=payload)
+
+        assert approval.status_code == 200
+        data = approval.json()
+        assert data["status"] == "approved"
+        assert data["merchant"] == "Rappi"
+        assert data["incident_id"] == recommendation["incident_id"]
+        assert data["simulation_option_id"] == recommendation["recommended_option_id"]
+        assert data["reviewed_simulation"]["status"] == "eligible"
+        assert data["reviewed_evidence"]
+        assert duplicate.status_code == 200
+        assert duplicate.json()["decision_id"] == data["decision_id"]
+
+        workflow = client.get(
+            f"/remediation/workflows/{recommendation['recommendation_id']}"
+        ).json()
+        assert workflow["status"] == "approved"
+        assert workflow["approval_decision_id"] == data["decision_id"]
+
+
+def test_approval_rejects_a_merchant_that_does_not_own_the_incident() -> None:
+    with TestClient(app) as client:
+        recommendation = _create_recommendation(client)
+        response = client.post(
+            "/remediation/approvals",
+            json=_approval_payload(
+                recommendation,
+                "approval-wrong-merchant-001",
+                merchant="Carrefour",
+            ),
+        )
+
+        assert response.status_code == 403
 
 
 def test_human_approved_change_exposes_metrics_audit_and_manual_rollback() -> None:
@@ -228,6 +291,55 @@ def test_rejected_recommendation_cannot_be_applied() -> None:
             "change-rappi-rejected-001",
         )
         assert rejected.status_code == 403
+
+
+def test_expired_approval_cannot_activate_a_change() -> None:
+    with TestClient(app) as client:
+        recommendation = _create_recommendation(client)
+        response = client.post(
+            "/remediation/approvals",
+            json=_approval_payload(
+                recommendation,
+                "approval-expired-001",
+                expires_at=(
+                    datetime.now(timezone.utc) - timedelta(minutes=1)
+                ).isoformat(),
+            ),
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "expired"
+        assert _apply_change(
+            client,
+            recommendation,
+            "approval-expired-001",
+            "change-expired-001",
+        ).status_code == 403
+
+
+def test_approved_decision_can_be_revoked_before_activation() -> None:
+    with TestClient(app) as client:
+        recommendation = _create_recommendation(client)
+        decision_id = "approval-revoked-001"
+        _record_approval(client, recommendation, decision_id)
+
+        revoked = client.post(
+            f"/remediation/approvals/{decision_id}/revoke",
+            json={
+                "merchant": "Rappi",
+                "revoked_by": "merchant-operator",
+                "reason": "The operator changed the incident assessment.",
+            },
+        )
+
+        assert revoked.status_code == 200
+        assert revoked.json()["status"] == "revoked"
+        assert _apply_change(
+            client,
+            recommendation,
+            decision_id,
+            "change-revoked-001",
+        ).status_code == 403
 
 
 def test_simulated_change_rolls_back_after_two_unhealthy_target_windows() -> None:

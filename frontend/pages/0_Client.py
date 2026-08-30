@@ -21,6 +21,7 @@ from frontend.remediation_client import (
     fetch_simulated_change,
     fetch_workflow,
     record_decision,
+    revoke_approval,
     rollback_simulated_change,
 )
 
@@ -102,7 +103,12 @@ def _render_routing_workflow(routing: dict[str, Any]) -> None:
                 key=f"approve-{recommendation_id}",
             ):
                 try:
-                    record_decision(API_BASE_URL, recommendation_id, "approved")
+                    record_decision(
+                        API_BASE_URL,
+                        recommendation_id,
+                        routing["merchant"],
+                        "approved",
+                    )
                     st.rerun()
                 except RemediationClientError as exc:
                     st.error(str(exc))
@@ -113,31 +119,59 @@ def _render_routing_workflow(routing: dict[str, Any]) -> None:
                 key=f"reject-{recommendation_id}",
             ):
                 try:
-                    record_decision(API_BASE_URL, recommendation_id, "rejected")
+                    record_decision(
+                        API_BASE_URL,
+                        recommendation_id,
+                        routing["merchant"],
+                        "rejected",
+                    )
                     st.rerun()
                 except RemediationClientError as exc:
                     st.error(str(exc))
     elif status == "approved":
         approval_decision_id = workflow.get("approval_decision_id")
-        if approval_decision_id and routing.get("rollback_reference"):
-            if st.button(
-                "Simulate application",
-                type="primary",
-                use_container_width=True,
-                key=f"apply-{recommendation_id}",
-            ):
-                try:
-                    apply_simulated_change(
-                        API_BASE_URL,
-                        recommendation_id,
-                        approval_decision_id,
-                        routing["rollback_reference"],
-                    )
-                    st.rerun()
-                except RemediationClientError as exc:
-                    st.error(str(exc))
-        else:
+        if approval_decision_id is None:
             st.error("The approved workflow is missing its safe application references.")
+        else:
+            apply_column, revoke_column = st.columns(2)
+            with apply_column:
+                if routing.get("rollback_reference") and st.button(
+                    "Simulate application",
+                    type="primary",
+                    use_container_width=True,
+                    key=f"apply-{recommendation_id}",
+                ):
+                    try:
+                        apply_simulated_change(
+                            API_BASE_URL,
+                            recommendation_id,
+                            approval_decision_id,
+                            routing["rollback_reference"],
+                        )
+                        st.rerun()
+                    except RemediationClientError as exc:
+                        st.error(str(exc))
+            with revoke_column:
+                if st.button(
+                    "Revoke approval",
+                    use_container_width=True,
+                    key=f"revoke-{recommendation_id}",
+                ):
+                    try:
+                        revoke_approval(
+                            API_BASE_URL,
+                            approval_decision_id,
+                            routing["merchant"],
+                        )
+                        st.rerun()
+                    except RemediationClientError as exc:
+                        st.error(str(exc))
+    elif status == "rejected":
+        st.warning("The operator rejected this recommendation.")
+    elif status == "expired":
+        st.warning("The approval expired before simulation activation.")
+    elif status == "revoked":
+        st.warning("The operator revoked approval before simulation activation.")
     elif status in {"simulated_active", "rolled_back", "completed"}:
         change_id = workflow.get("change_id")
         if change_id is None:
@@ -812,6 +846,7 @@ if live_incidents is not None:
             )
             routing_recommendation = {
                 "recommendation_id": remediation["recommendation_id"],
+                "merchant": raw_incident["merchant"],
                 "status": remediation["status"],
                 "rationale": remediation["rationale"],
                 "confidence": remediation.get("confidence", 0.0),

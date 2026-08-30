@@ -291,17 +291,41 @@ class RoutingRecommendation(BaseModel):
     dry_run: Literal[True] = True
 
 
-class ApprovalDecision(BaseModel):
-    """Human decision recorded before an execution request can be considered."""
+class ApprovalRequest(BaseModel):
+    """Human input for a recommendation; linked evidence is derived server-side."""
 
     model_config = ConfigDict(extra="forbid")
 
     decision_id: str = Field(min_length=1, max_length=128)
     recommendation_id: str = Field(min_length=1, max_length=128)
+    merchant: Merchant
     decision: Literal["approved", "rejected"]
     decided_by: str = Field(min_length=1, max_length=128)
     decided_at: datetime
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    expires_at: datetime | None = None
     note: str | None = Field(default=None, max_length=1_000)
+
+
+class ApprovalDecision(ApprovalRequest):
+    """Immutable approval record with the reviewed evidence snapshot."""
+
+    merchant: Merchant
+    incident_id: str = Field(min_length=1, max_length=128)
+    simulation_option_id: str | None = Field(default=None, max_length=128)
+    reviewed_simulation: SimulationResult | None = None
+    reviewed_evidence: list[EvidenceItem] = Field(default_factory=list)
+    status: Literal["approved", "rejected", "expired", "revoked"]
+
+
+class ApprovalRevocationRequest(BaseModel):
+    """Human revocation before a simulated change has started."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    revoked_by: str = Field(min_length=1, max_length=128)
+    merchant: Merchant
+    reason: str = Field(min_length=1, max_length=1_000)
 
 
 class ExecutionRequest(BaseModel):
@@ -406,6 +430,8 @@ class RoutingWorkflow(BaseModel):
         "pending_approval",
         "approved",
         "rejected",
+        "expired",
+        "revoked",
         "simulated_active",
         "rolled_back",
         "completed",
@@ -426,6 +452,8 @@ class RemediationAuditEvent(BaseModel):
     event_type: Literal[
         "recommendation_created",
         "approval_recorded",
+        "approval_revoked",
+        "approval_expired",
         "simulated_change_applied",
         "target_route_monitored",
         "simulated_change_rolled_back",

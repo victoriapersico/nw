@@ -18,23 +18,36 @@ eligible POST-MVP-04 recommendation (pending_approval)
 `POST /remediation/executions` remains the POST-01 compatibility endpoint and
 always returns `dry_run` or `denied`. It is not an execution path.
 
+An approval expires after 30 minutes unless an explicit `expires_at` is
+provided. An approved decision may be revoked before activation. Both states
+block simulated activation.
+
 ## Guardrails
 
 - The selected alternative must be the recommendation's eligible option.
 - Its traffic shift must match the deterministic recommendation cap.
-- The approval must match the recommendation and be `approved`.
+- The approval must match the merchant, incident, recommendation, reviewed RCA
+  evidence, and eligible simulation result.
+- The approval must be current: `approved`, not expired or revoked.
 - The rollback reference must match the recommendation.
+- The activation re-checks the current provider policy, target provider,
+  traffic cap, and dry-run-only setting.
 - Applying the same idempotency key returns the original simulated change.
 - Every recommendation, approval, activation, monitoring observation, completion,
-  and rollback is exposed in `GET /remediation/audit`.
+  and rollback is exposed in `GET /remediation/audit` and appended to local
+  SQLite (the location can be configured with `REMEDIATION_AUDIT_DB`).
 - A `not_recommended` result is audited but never enters the approval workflow.
 
 ## Demo endpoints
 
-- `POST /remediation/approvals` — human approves or rejects.
+- `POST /remediation/approvals` — human approves or rejects; returns the
+  server-linked evidence and simulation snapshot.
+- `POST /remediation/approvals/{decision_id}/revoke` — revokes a current
+  approval before activation.
 - `POST /remediation/changes` — activates the local simulated change.
 - `GET /remediation/workflows/{recommendation_id}` — shows the explicit lifecycle
-  (`pending_approval`, `approved`, `simulated_active`, `rolled_back`, or `completed`).
+  (`pending_approval`, `approved`, `rejected`, `expired`, `revoked`,
+  `simulated_active`, `rolled_back`, or `completed`).
 - `GET /remediation/changes/{change_id}` — shows state and monitor windows.
 - `POST /remediation/changes/{change_id}/rollback` — human rollback.
 - `POST /remediation/changes/{change_id}/complete` — human closes a healthy simulation.

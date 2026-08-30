@@ -152,6 +152,11 @@ class RemediationSimulator:
             None,
         )
 
+    def policy_for_id(self, policy_id: str) -> RoutingPolicy | None:
+        """Expose the frozen policy for a final activation-time guardrail check."""
+
+        return self.policy_by_id(policy_id)
+
     def _policy_for(
         self, incident: Incident, payment_method: str | None
     ) -> RoutingPolicy | None:

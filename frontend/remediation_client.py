@@ -55,22 +55,47 @@ def fetch_workflow(base_url: str, recommendation_id: str) -> dict[str, Any]:
 def record_decision(
     base_url: str,
     recommendation_id: str,
+    merchant: str,
     decision: Literal["approved", "rejected"],
     *,
     decided_by: str = "merchant-operator",
     note: str | None = None,
 ) -> dict[str, Any]:
+    operation_id = uuid4().hex
     result = _request_json(
         "POST",
         base_url,
         "/remediation/approvals",
         payload={
-            "decision_id": f"approval-{uuid4().hex}",
+            "decision_id": f"approval-{operation_id}",
             "recommendation_id": recommendation_id,
+            "merchant": merchant,
             "decision": decision,
             "decided_by": decided_by,
             "decided_at": datetime.now(timezone.utc).isoformat(),
+            "idempotency_key": f"approval-request-{operation_id}",
             "note": note,
+        },
+    )
+    assert isinstance(result, dict)
+    return result
+
+
+def revoke_approval(
+    base_url: str,
+    decision_id: str,
+    merchant: str,
+    *,
+    revoked_by: str = "merchant-operator",
+) -> dict[str, Any]:
+    result = _request_json(
+        "POST",
+        base_url,
+        f"/remediation/approvals/{decision_id}/revoke",
+        payload={
+            "merchant": merchant,
+            "revoked_by": revoked_by,
+            "reason": "Operator revoked approval before simulation activation.",
         },
     )
     assert isinstance(result, dict)
