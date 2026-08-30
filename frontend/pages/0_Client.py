@@ -13,6 +13,12 @@ from backend.schemas import (
     COUNTRY_PAYMENT_METHODS,
     InjectionConfig,
 )
+from frontend.alerts_client import (
+    AlertsClientError,
+    acknowledge_alert,
+    build_alert_view_model,
+    fetch_alerts,
+)
 from frontend.remediation_client import (
     RemediationClientError,
     apply_simulated_change,
@@ -29,6 +35,113 @@ API_BASE_URL = os.getenv(
     "CONTROL_TOWER_API_URL",
     "http://127.0.0.1:8000",
 )
+
+
+def _notification_snapshot(
+    acknowledged: bool | None,
+) -> tuple[list[dict[str, Any]], bool, str | None]:
+    """Read one alert view and retain only a clearly-labelled stale fallback."""
+
+    cache_key = f"notifications_last_success:{acknowledged}"
+    try:
+        alerts = fetch_alerts(API_BASE_URL, acknowledged=acknowledged)
+    except AlertsClientError as exc:
+        stale_alerts = st.session_state.get(cache_key)
+        if isinstance(stale_alerts, list):
+            return stale_alerts, True, str(exc)
+        return [], False, str(exc)
+    st.session_state[cache_key] = alerts
+    return alerts, False, None
+
+
+def _render_notification_card(alert: dict[str, Any]) -> None:
+    """Render one alert using native text components, never payload HTML."""
+
+    view = build_alert_view_model(alert)
+    with st.container(border=True):
+        st.markdown(f"{view['icon']} **{view['title']}**")
+        for detail in view["details"]:
+            # Acknowledged entries deliberately use the lower-emphasis caption
+            # treatment so they remain available in All without competing with
+            # unread operational work.
+            if view["acknowledged"]:
+                st.caption(detail)
+            else:
+                st.text(detail)
+        for metadata in view["metadata"]:
+            st.caption(metadata)
+        st.caption(view["created_at"])
+        if view["acknowledged"]:
+            st.caption(f":material/check: {view['acknowledgement']}")
+        else:
+            error_key = f"ack_alert_error_{view['alert_id']}"
+            if st.button(
+                "Acknowledge",
+                key=f"ack_alert_{view['alert_id']}",
+                icon=":material/check:",
+                width="content",
+            ):
+                try:
+                    acknowledge_alert(API_BASE_URL, view["alert_id"])
+                    # Re-read before rerunning; the backend remains the source of truth.
+                    fetch_alerts(API_BASE_URL, acknowledged=False)
+                    st.session_state.pop(error_key, None)
+                    st.toast("Notification acknowledged.", icon=":material/check:")
+                    st.rerun()
+                except AlertsClientError as exc:
+                    st.session_state[error_key] = str(exc)
+            if error := st.session_state.get(error_key):
+                st.error(error)
+
+
+@st.fragment(run_every="5s")
+def render_notification_center() -> None:
+    """Compact, backend-backed inbox that refreshes independently of the dashboard."""
+
+    unread_alerts, unread_is_stale, unread_error = _notification_snapshot(False)
+    unread_count = len(unread_alerts)
+    label = "Notifications" if unread_count == 0 else f"Notifications · {unread_count}"
+
+    with st.popover(
+        label,
+        key="notifications_center",
+        icon=":material/notifications:",
+        help="Operational notifications",
+    ):
+        st.markdown("#### Notifications")
+        selected_view = st.radio(
+            "Notification view",
+            options=("Unread", "All"),
+            horizontal=True,
+            label_visibility="collapsed",
+            key="notifications_filter",
+        )
+        if selected_view == "Unread":
+            alerts, is_stale, error = unread_alerts, unread_is_stale, unread_error
+        else:
+            with st.spinner("Loading notifications..."):
+                alerts, is_stale, error = _notification_snapshot(None)
+
+        if error and not is_stale:
+            st.error("Notifications are temporarily unavailable.")
+            if st.button("Retry", key="notifications_retry", width="content"):
+                st.rerun()
+            return
+        if is_stale:
+            st.warning("Showing the last available notification list. It may be out of date.")
+
+        if not alerts:
+            if selected_view == "Unread":
+                st.success("You’re all caught up.")
+                st.caption("No unread operational notifications.")
+            else:
+                st.info("No notifications yet.")
+                st.caption("New incidents and operator actions will appear here.")
+            return
+
+        with st.container(height=390):
+            for alert in alerts[:20]:
+                _render_notification_card(alert)
 
 
 def fetch_merchant_incidents(
@@ -664,14 +777,21 @@ st.markdown(
       .toolbar-live { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:5px 9px; font-size:11px; font-weight:750; }
       .toolbar-live.on { color:#b8f7d5; background:rgba(29,171,108,.18); border:1px solid rgba(133,239,184,.28); }
       .toolbar-live.off { color:#ffe0aa; background:rgba(231,157,44,.16); border:1px solid rgba(255,210,130,.25); }
+      .st-key-judge_lab > button { white-space:nowrap; }
+      .st-key-notifications_center > button {
+        min-height:36px; border-radius:8px; border:1px solid rgba(255,255,255,.34);
+        background:rgba(255,255,255,.10); color:#fff; font-weight:750;
+      }
+      .st-key-notifications_center [data-testid="stPopoverBody"] { width:min(420px, calc(100vw - 32px)); }
+      .st-key-notifications_center [data-testid="stAlert"] { border-radius:0; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 with st.container(key="demo_toolbar"):
-    toolbar_logo, toolbar_brand, toolbar_merchant, toolbar_status, toolbar_action = st.columns(
-        [0.45, 1.95, 1.5, 2.5, 1.4], vertical_alignment="center"
+    toolbar_logo, toolbar_brand, toolbar_merchant, toolbar_status, toolbar_notifications, toolbar_action = st.columns(
+        [0.45, 1.82, 1.4, 2.15, 1.35, 1.35], vertical_alignment="center"
     )
     with toolbar_logo:
         st.image(MERCHANT_LOGOS[current_merchant], width=40)
@@ -696,6 +816,8 @@ with st.container(key="demo_toolbar"):
             "<div class='toolbar-copy'>One real simulated payment window every 5 seconds.</div>",
             unsafe_allow_html=True,
         )
+    with toolbar_notifications:
+        render_notification_center()
     with toolbar_action:
         action_label = "Pause simulator" if st.session_state["live_playback"] else "Start simulator"
         if st.button(action_label, key="demo_live_action", width="stretch"):
@@ -705,7 +827,7 @@ with st.container(key="demo_toolbar"):
 
 live_playback = bool(st.session_state["live_playback"])
 
-with st.popover("Judge Lab"):
+with st.popover("Judge Lab", key="judge_lab"):
     st.markdown("#### Inject test incident")
     st.caption("Configure a simulated degradation without leaving the dashboard.")
     with st.form("judge_injection_form"):
