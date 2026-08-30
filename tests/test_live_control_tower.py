@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
+import pytest
 
 from backend.live_control_tower import build_live_control_tower
 from backend.live_control_tower import LiveControlTower
@@ -10,6 +11,7 @@ from backend.schemas import (
     DetectionResponse,
     Diagnosis,
     Incident,
+    IncidentAssistantRequest,
     InjectionConfig,
     Transaction,
     TransactionBatch,
@@ -158,3 +160,29 @@ def test_live_tick_preserves_incident_engine_priority_order() -> None:
         "inc-critical",
         "inc-high-loss",
     ]
+
+
+def test_incident_assistant_uses_a_merchant_owned_snapshot() -> None:
+    tower = LiveControlTower(UnorderedLiveRuntime(), SCENARIOS[0])
+    tower.tick()
+
+    answer = tower.answer_incident_question(
+        "inc-high-loss",
+        IncidentAssistantRequest(
+            merchant="Rappi",
+            question="What is the incident status?",
+        ),
+    )
+
+    assert answer.incident_id == "inc-high-loss"
+    assert answer.mode == "mock"
+    assert any(fact.fact_id == "incident_scope" for fact in answer.evidence)
+
+    with pytest.raises(PermissionError, match="does not own"):
+        tower.answer_incident_question(
+            "inc-high-loss",
+            IncidentAssistantRequest(
+                merchant="Carrefour",
+                question="What is the incident status?",
+            ),
+        )

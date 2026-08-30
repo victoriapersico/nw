@@ -256,7 +256,9 @@ def test_openai_explanation_can_abstain_after_deterministic_selection(
     assert recommendation.abstention_reason == parsed.abstention_reason
 
 
-def test_model_authored_rationale_cannot_invent_numeric_recovery(monkeypatch) -> None:
+def test_model_authored_numeric_claim_triggers_safe_deterministic_fallback(
+    monkeypatch,
+) -> None:
     parsed = recommendation_module._RoutingExplanation(
         status="recommended",
         rationale="This route will recover $999999 per hour.",
@@ -278,13 +280,17 @@ def test_model_authored_rationale_cannot_invent_numeric_recovery(monkeypatch) ->
         ),
     )
 
-    with pytest.raises(RoutingRecommendationError, match="numeric claim"):
-        recommend_routing(
-            _diagnosis(),
-            _policy(),
-            [_simulation("stripe-25", "Stripe", 0.25)],
-            mock_mode=False,
-        )
+    recommendation = recommend_routing(
+        _diagnosis(),
+        _policy(),
+        [_simulation("stripe-25", "Stripe", 0.25)],
+        mock_mode=False,
+    )
+
+    assert recommendation.status == "recommended"
+    assert recommendation.recommended_option_id == "stripe-25"
+    assert "$999999" not in recommendation.rationale
+    assert "deterministic" in recommendation.rationale
 
 
 def test_model_input_contains_only_allowed_contracts() -> None:

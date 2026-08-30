@@ -491,6 +491,45 @@ class DiagnosedIncident(BaseModel):
     remediation: RoutingRecommendation | None = None
 
 
+class IncidentAssistantRequest(BaseModel):
+    """One evidence-scoped operator question about an existing incident."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    merchant: Merchant
+    question: str = Field(min_length=1, max_length=1_000)
+
+    @field_validator("question")
+    @classmethod
+    def reject_blank_question(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("must not be blank")
+        return cleaned
+
+
+class IncidentAssistantEvidence(BaseModel):
+    """One deterministic fact cited by the incident assistant."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fact_id: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=128)
+    value: str = Field(min_length=1, max_length=1_000)
+
+
+class IncidentAssistantResponse(BaseModel):
+    """Grounded assistance that cannot approve or apply routing changes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: str = Field(min_length=1, max_length=128)
+    answer: str = Field(min_length=1, max_length=2_000)
+    answerable: bool
+    evidence: list[IncidentAssistantEvidence] = Field(default_factory=list)
+    mode: Literal["mock", "openai", "fallback"]
+
+
 class DeclineCodePatternEntry(BaseModel):
     """One code in a normalized, deterministic decline pattern."""
 

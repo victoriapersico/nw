@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from openai import APIError, OpenAI
+from openai import (
+    ContentFilterFinishReasonError,
+    LengthFinishReasonError,
+    OpenAI,
+    OpenAIError,
+)
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.ai.prompts import NARRATION_INSTRUCTIONS, build_evidence_input
@@ -75,11 +80,17 @@ def _openai_narrative(diagnosis: Diagnosis) -> _NarrativeResponse:
             instructions=NARRATION_INSTRUCTIONS,
             input=build_evidence_input(diagnosis),
             text_format=_NarrativeResponse,
+            store=False,
         )
-    except APIError as exc:
-        raise DiagnosisNarrationError(f"OpenAI API request failed: {exc}") from exc
-    except ValidationError as exc:
-        raise DiagnosisNarrationError("OpenAI returned an invalid narrative.") from exc
+    except (
+        OpenAIError,
+        ContentFilterFinishReasonError,
+        LengthFinishReasonError,
+        ValidationError,
+    ) as exc:
+        raise DiagnosisNarrationError(
+            "OpenAI could not return a valid diagnosis narrative."
+        ) from exc
 
     parsed = response.output_parsed
     if parsed is None:
@@ -95,11 +106,15 @@ def narrate_diagnosis(
     """Enrich wording only; deterministic RCA facts always remain unchanged."""
 
     use_mock = settings.mock_mode if mock_mode is None else mock_mode
-    narrative = (
-        _mock_narrative(diagnosis)
-        if use_mock or diagnosis.diagnosis_status == "insufficient_evidence"
-        else _openai_narrative(diagnosis)
-    )
+    if use_mock or diagnosis.diagnosis_status == "insufficient_evidence":
+        narrative = _mock_narrative(diagnosis)
+    else:
+        try:
+            narrative = _openai_narrative(diagnosis)
+        except Exception:
+            # Narration is optional. Preserve the incident and fall back to the
+            # same deterministic evidence-bound wording used in Mock Mode.
+            narrative = _mock_narrative(diagnosis)
     return diagnosis.model_copy(
         update={
             "explanation": narrative.explanation,

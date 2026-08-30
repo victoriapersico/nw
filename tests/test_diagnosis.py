@@ -57,6 +57,24 @@ def test_insufficient_evidence_abstains_without_openai(monkeypatch) -> None:
     assert "more evidence" in narrated.recommended_action
 
 
+def test_openai_narration_failure_falls_back_without_losing_diagnosis(
+    monkeypatch,
+) -> None:
+    deterministic = make_diagnosis()
+
+    def fail_narration(*_args, **_kwargs):
+        raise diagnosis_module.DiagnosisNarrationError("provider unavailable")
+
+    monkeypatch.setattr(diagnosis_module, "_openai_narrative", fail_narration)
+
+    narrated = narrate_diagnosis(deterministic, mock_mode=False)
+
+    assert narrated.incident_id == deterministic.incident_id
+    assert narrated.evidence == deterministic.evidence
+    assert narrated.diagnosis_status == "confirmed"
+    assert "Stripe" in narrated.explanation
+
+
 def test_evidence_prompt_excludes_raw_transactions() -> None:
     prompt = build_evidence_input(make_diagnosis())
 
